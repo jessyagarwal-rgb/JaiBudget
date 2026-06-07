@@ -22,16 +22,13 @@ const DEFAULT_FUTURE = [
   { id:"fe3", name:"Hyperspace",  emoji:"🚀", costPerUse:20,   timesPerYear:6,  monthly:10.00,  type:"limited",  note:"6x this year"           },
   { id:"fe5", name:"Movies",      emoji:"🎬", costPerUse:20,   timesPerYear:4,  monthly:6.00,   type:"limited",  note:"4x this year"           },
   { id:"fe6", name:"Skiing",      emoji:"⛷️", costPerUse:40,   timesPerYear:5,  monthly:16.67,  type:"limited",  note:"5x this year"           },
-  { id:"fe7", name:"Disney Trip", emoji:"🏰", costPerUse:1435, timesPerYear:1,  monthly:119.58, type:"biggoal",  note:"Park · Hotel · Flights"  },
+  { id:"fe7", name:"Disney Trip", emoji:"🏰", costPerUse:1435, timesPerYear:1,  monthly:119.58, type:"biggoal",  note:"Park · Hotel · Flights", initialPool:960  },
 ];
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const STORAGE_KEY = "jai_budget_v6";
+const STORAGE_KEY = "jai_budget_v7";
+const API_KEY_STORAGE = "jai_coach_api_key";
 
-// Determine API endpoint — use proxy when deployed, direct when in Claude artifact
-const API_ENDPOINT = window.location.hostname === "localhost" || window.location.hostname.includes("claude")
-  ? "https://api.anthropic.com/v1/messages"
-  : "/api/coach";
 
 function loadData() {
   try {
@@ -45,7 +42,8 @@ function loadData() {
       return { ...stored, futureItems:[...mergedDefaults,...userAdded] };
     }
   } catch {}
-  return { transactions:[], earnings:[], closedMonths:[], savingsJar:0, savingsLog:[], futureItems:DEFAULT_FUTURE.map(f=>({...f,uses:[]})) };
+  const initialSavingsLog = [{id:"init-savings",amount:130,note:"💰 Previous savings deposit",date:new Date(START_YEAR,START_MONTH,1,0,0,0).toISOString(),type:"deposit"}];
+  return { transactions:[], earnings:[], closedMonths:[], savingsJar:130, savingsLog:initialSavingsLog, futureItems:DEFAULT_FUTURE.map(f=>({...f,uses:[]})) };
 }
 function saveData(d) { try { localStorage.setItem(STORAGE_KEY,JSON.stringify(d)); } catch {} }
 
@@ -89,6 +87,8 @@ export default function App() {
   const [chatMsgs,setChatMsgs]       = useState([]);
   const [chatInput,setChatInput]     = useState("");
   const [chatLoading,setChatLoading] = useState(false);
+  const [apiKeyModal,setApiKeyModal] = useState(false);
+  const [apiKeyInput,setApiKeyInput] = useState(()=>localStorage.getItem(API_KEY_STORAGE)||"");
   // History view mode
   const [historyTab,setHistoryTab]   = useState("monthly"); // "monthly" | "yearly"
   const chatEndRef = useRef(null);
@@ -135,7 +135,7 @@ export default function App() {
 
   function itemStats(item) {
     const elapsed=monthsElapsed(selMonth);
-    const pool=parseFloat((item.monthly*elapsed).toFixed(2));
+    const pool=parseFloat(((item.initialPool||0)+item.monthly*elapsed).toFixed(2));
     const uses=item.uses||[];
     const totalUsed=parseFloat(uses.reduce((s,u)=>s+u.amount,0).toFixed(2));
     const useCount=uses.length;
@@ -178,13 +178,21 @@ ${futureBreakdown}`;
 
   // ── AI Coach ──
   async function callAI(messages, systemPrompt) {
-    const isArtifact = window.location.hostname.includes("claude") || window.location.hostname === "localhost";
-    const url = isArtifact ? "https://api.anthropic.com/v1/messages" : "/api/coach";
-    const headers = { "Content-Type":"application/json" };
+    const isDev = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    const storedKey = localStorage.getItem(API_KEY_STORAGE);
+    const url = isDev ? "https://api.anthropic.com/v1/messages" : "/api/coach";
+    const headers = { "Content-Type":"application/json", ...(isDev && storedKey ? {"x-api-key":storedKey,"anthropic-version":"2023-06-01"} : {}) };
     const body = { model:"claude-sonnet-4-20250514", max_tokens:1000, system:systemPrompt, messages };
     const res = await fetch(url, { method:"POST", headers, body:JSON.stringify(body) });
     const d = await res.json();
     return d.content?.find(c=>c.type==="text")?.text || "Try again!";
+  }
+
+  function saveApiKey() {
+    const key = apiKeyInput.trim();
+    if(key) { localStorage.setItem(API_KEY_STORAGE, key); showToast("🔑 API key saved!","#6C63FF"); }
+    else { localStorage.removeItem(API_KEY_STORAGE); showToast("Key removed","#aaa"); }
+    setApiKeyModal(false);
   }
 
   async function startReport() {
@@ -315,10 +323,13 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
         <div style={{position:"fixed",inset:0,zIndex:1000,background:"#0f0c29",display:"flex",flexDirection:"column",maxWidth:430,margin:"0 auto"}}>
           <div style={{background:"linear-gradient(135deg,#1a1a2e,#16213e)",padding:"18px 18px 14px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
             <div>
-              <div style={{fontWeight:900,fontSize:17,color:"#fff"}}>🎙️ Coach Jai</div>
+              <div style={{fontWeight:900,fontSize:17,color:"#fff"}}>💰 $ Coach</div>
               <div style={{fontWeight:600,fontSize:11,color:"rgba(255,255,255,.5)"}}>Your personal money hype coach</div>
             </div>
-            <button onClick={()=>setReportView(false)} className="bp" style={{background:"rgba(255,255,255,.1)",border:"none",borderRadius:999,padding:"8px 16px",color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>← Back</button>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setApiKeyModal(true)} className="bp" title="API Key Settings" style={{background:"rgba(255,255,255,.1)",border:"none",borderRadius:999,padding:"8px 12px",color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>🔑</button>
+              <button onClick={()=>setReportView(false)} className="bp" style={{background:"rgba(255,255,255,.1)",border:"none",borderRadius:999,padding:"8px 16px",color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>← Back</button>
+            </div>
           </div>
           <div style={{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}}>
             {chatMsgs.length===0&&!chatLoading&&(
@@ -360,6 +371,19 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
           </div>
         </div>
       )}
+
+      {/* ══ API KEY MODAL ══ */}
+      {apiKeyModal&&<div style={OL}><div style={MB}>
+        <div style={{fontWeight:900,fontSize:18,color:"#333",marginBottom:6}}>🔑 $ Coach API Key</div>
+        <div style={{fontWeight:600,fontSize:12,color:"#888",marginBottom:14,lineHeight:1.6}}>
+          <b>Deployed on Netlify?</b> Set <code style={{background:"#f0f0f0",padding:"1px 5px",borderRadius:4}}>ANTHROPIC_API_KEY</code> in your Netlify site's <b>Environment Variables</b> (Site settings → Environment variables). No key needed in the app.<br/><br/>
+          <b>Running locally?</b> Paste your Anthropic API key below — it's saved only in this browser.
+        </div>
+        <input type="password" value={apiKeyInput} onChange={e=>setApiKeyInput(e.target.value)} placeholder="sk-ant-..." style={{...INP,fontFamily:"monospace",fontSize:13}}/>
+        <div style={{fontSize:11,color:"#aaa",fontWeight:600,marginBottom:10}}>Get your key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{color:"#6C63FF"}}>console.anthropic.com</a></div>
+        <button onClick={saveApiKey} className="bp" style={BTN("linear-gradient(135deg,#6C63FF,#4a41dd)")}>Save Key 🔑</button>
+        <button onClick={()=>setApiKeyModal(false)} className="bp" style={BTN("#f5f5f5","#999",0)}>Cancel</button>
+      </div></div>}
 
       {/* ══ MODALS ══ */}
       {rolloverModal&&<div style={OL}><div style={MB}><div style={{textAlign:"center"}}>
@@ -572,7 +596,7 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:9}}>
             <div style={{fontSize:12,fontWeight:700,opacity:.8,letterSpacing:1,textTransform:"uppercase"}}>Jai's Money Tracker 💰</div>
             <button onClick={()=>startReport()} className="bp" style={{background:"rgba(255,255,255,.18)",border:"1px solid rgba(255,255,255,.3)",borderRadius:999,padding:"6px 13px",color:"#fff",fontWeight:800,fontSize:12,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:5,width:"auto",marginBottom:0}}>
-              📊 Run Report
+              💰 $ Coach
             </button>
           </div>
           <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:3}}>
