@@ -178,13 +178,12 @@ ${futureBreakdown}`;
 
   // ── AI Coach ──
   async function callAI(messages, systemPrompt) {
-    const isDev = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
     const storedKey = localStorage.getItem(API_KEY_STORAGE);
-    const url = isDev ? "https://api.anthropic.com/v1/messages" : "/api/coach";
-    const headers = { "Content-Type":"application/json", ...(isDev && storedKey ? {"x-api-key":storedKey,"anthropic-version":"2023-06-01"} : {}) };
-    const body = { model:"claude-sonnet-4-20250514", max_tokens:1000, system:systemPrompt, messages };
-    const res = await fetch(url, { method:"POST", headers, body:JSON.stringify(body) });
+    const headers = { "Content-Type":"application/json" };
+    const body = { model:"claude-sonnet-4-20250514", max_tokens:1000, system:systemPrompt, messages, ...(storedKey ? {apiKey: storedKey} : {}) };
+    const res = await fetch("/api/coach", { method:"POST", headers, body:JSON.stringify(body) });
     const d = await res.json();
+    if(d.error) throw new Error(d.error);
     return d.content?.find(c=>c.type==="text")?.text || "Try again!";
   }
 
@@ -369,21 +368,22 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
             <input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendChatMsg()} placeholder="Ask Coach Jai anything..." style={{flex:1,padding:"12px 15px",borderRadius:999,border:"1px solid rgba(255,255,255,.2)",background:"rgba(255,255,255,.08)",color:"#fff",fontSize:14,fontWeight:600,fontFamily:"inherit",outline:"none"}}/>
             <button onClick={sendChatMsg} disabled={!chatInput.trim()||chatLoading} className="bp" style={{background:chatInput.trim()&&!chatLoading?"linear-gradient(135deg,#667eea,#764ba2)":"rgba(255,255,255,.1)",color:"#fff",border:"none",borderRadius:999,padding:"0 18px",fontSize:18,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0,opacity:chatInput.trim()&&!chatLoading?1:.5}}>→</button>
           </div>
+
+          {/* API Key Modal — inside coach overlay so it renders above zIndex:1000 */}
+          {apiKeyModal&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.7)",zIndex:10,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+            <div style={{background:"#fff",borderRadius:26,padding:"22px 18px",maxWidth:360,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,.4)"}}>
+              <div style={{fontWeight:900,fontSize:18,color:"#333",marginBottom:6}}>🔑 $ Coach API Key</div>
+              <div style={{fontWeight:600,fontSize:12,color:"#888",marginBottom:14,lineHeight:1.6}}>
+                Enter your Anthropic API key — it's saved in this browser and sent securely to the server when making requests.<br/><br/>
+                Get your key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{color:"#6C63FF"}}>console.anthropic.com</a>
+              </div>
+              <input type="password" value={apiKeyInput} onChange={e=>setApiKeyInput(e.target.value)} placeholder="sk-ant-..." style={{...INP,fontFamily:"monospace",fontSize:13}}/>
+              <button onClick={saveApiKey} className="bp" style={BTN("linear-gradient(135deg,#6C63FF,#4a41dd)")}>Save Key 🔑</button>
+              <button onClick={()=>setApiKeyModal(false)} className="bp" style={BTN("#f5f5f5","#999",0)}>Cancel</button>
+            </div>
+          </div>}
         </div>
       )}
-
-      {/* ══ API KEY MODAL ══ */}
-      {apiKeyModal&&<div style={OL}><div style={MB}>
-        <div style={{fontWeight:900,fontSize:18,color:"#333",marginBottom:6}}>🔑 $ Coach API Key</div>
-        <div style={{fontWeight:600,fontSize:12,color:"#888",marginBottom:14,lineHeight:1.6}}>
-          <b>Deployed on Netlify?</b> Set <code style={{background:"#f0f0f0",padding:"1px 5px",borderRadius:4}}>ANTHROPIC_API_KEY</code> in your Netlify site's <b>Environment Variables</b> (Site settings → Environment variables). No key needed in the app.<br/><br/>
-          <b>Running locally?</b> Paste your Anthropic API key below — it's saved only in this browser.
-        </div>
-        <input type="password" value={apiKeyInput} onChange={e=>setApiKeyInput(e.target.value)} placeholder="sk-ant-..." style={{...INP,fontFamily:"monospace",fontSize:13}}/>
-        <div style={{fontSize:11,color:"#aaa",fontWeight:600,marginBottom:10}}>Get your key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{color:"#6C63FF"}}>console.anthropic.com</a></div>
-        <button onClick={saveApiKey} className="bp" style={BTN("linear-gradient(135deg,#6C63FF,#4a41dd)")}>Save Key 🔑</button>
-        <button onClick={()=>setApiKeyModal(false)} className="bp" style={BTN("#f5f5f5","#999",0)}>Cancel</button>
-      </div></div>}
 
       {/* ══ MODALS ══ */}
       {rolloverModal&&<div style={OL}><div style={MB}><div style={{textAlign:"center"}}>
