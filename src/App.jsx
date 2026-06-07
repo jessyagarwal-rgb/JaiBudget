@@ -12,33 +12,36 @@ const CATEGORIES = [
   { id:"charity", name:"Giving Back",   emoji:"❤️", color:"#EE5A87", bg:"#FFF0F5", budget:6.67   },
 ];
 
+// type: "monthly" = happens every month (video games, roblox, etc.)
+// type: "limited" = saving up for, happens X times a year
+// type: "biggoal" = large one-time saving goal (Disney)
 const DEFAULT_FUTURE = [
-  { id:"fe1", name:"Escape Room", emoji:"🚪", costPerUse:50,   timesPerYear:1,  monthly:4.00,   type:"limited",   note:"$50 · 1x/year"         },
-  { id:"fe2", name:"Mini Golf",   emoji:"⛳", costPerUse:15,   timesPerYear:2,  monthly:2.50,   type:"limited",   note:"$15 · 2x/year"          },
-  { id:"fe3", name:"Hyperspace",  emoji:"🚀", costPerUse:20,   timesPerYear:6,  monthly:10.00,  type:"limited",   note:"$20 · 6x/year"          },
-  { id:"fe4", name:"Video Games", emoji:"🕹️", costPerUse:13,   timesPerYear:12, monthly:13.00,  type:"recurring", note:"$13/month"              },
-  { id:"fe5", name:"Movies",      emoji:"🎬", costPerUse:20,   timesPerYear:4,  monthly:6.00,   type:"limited",   note:"$20 · 4x/year"          },
-  { id:"fe6", name:"Skiing",      emoji:"⛷️", costPerUse:40,   timesPerYear:5,  monthly:16.67,  type:"limited",   note:"$40 · 5x/year"          },
-  { id:"fe7", name:"Disney Trip", emoji:"🏰", costPerUse:1435, timesPerYear:1,  monthly:119.58, type:"limited",   note:"Park+Hotel+Flights+Food" },
+  { id:"fe4", name:"Video Games", emoji:"🕹️", costPerUse:13,   timesPerYear:12, monthly:13.00,  type:"monthly",  note:"$13/month"              },
+  { id:"fe1", name:"Escape Room", emoji:"🚪", costPerUse:50,   timesPerYear:1,  monthly:4.00,   type:"limited",  note:"1x this year"           },
+  { id:"fe2", name:"Mini Golf",   emoji:"⛳", costPerUse:15,   timesPerYear:2,  monthly:2.50,   type:"limited",  note:"2x this year"           },
+  { id:"fe3", name:"Hyperspace",  emoji:"🚀", costPerUse:20,   timesPerYear:6,  monthly:10.00,  type:"limited",  note:"6x this year"           },
+  { id:"fe5", name:"Movies",      emoji:"🎬", costPerUse:20,   timesPerYear:4,  monthly:6.00,   type:"limited",  note:"4x this year"           },
+  { id:"fe6", name:"Skiing",      emoji:"⛷️", costPerUse:40,   timesPerYear:5,  monthly:16.67,  type:"limited",  note:"5x this year"           },
+  { id:"fe7", name:"Disney Trip", emoji:"🏰", costPerUse:1435, timesPerYear:1,  monthly:119.58, type:"biggoal",  note:"Park · Hotel · Flights"  },
 ];
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const STORAGE_KEY = "jai_budget_v6";
 
+// Determine API endpoint — use proxy when deployed, direct when in Claude artifact
+const API_ENDPOINT = window.location.hostname === "localhost" || window.location.hostname.includes("claude")
+  ? "https://api.anthropic.com/v1/messages"
+  : "/api/coach";
+
 function loadData() {
   try {
-    const r=localStorage.getItem(STORAGE_KEY);
-    if(r) {
-      const stored=JSON.parse(r);
-      // Always re-apply DEFAULT_FUTURE fields (name, emoji, costPerUse, timesPerYear, monthly, type, note)
-      // but keep any user-logged uses. User-added items (not in DEFAULT_FUTURE) are kept as-is.
-      const defaultIds=new Set(DEFAULT_FUTURE.map(f=>f.id));
-      const storedById=Object.fromEntries((stored.futureItems||[]).map(f=>[f.id,f]));
-      const mergedDefaults=DEFAULT_FUTURE.map(def=>({
-        ...def,                                      // always use latest defaults
-        uses:(storedById[def.id]?.uses)||[],         // keep logged uses
-      }));
-      const userAdded=(stored.futureItems||[]).filter(f=>!defaultIds.has(f.id));
+    const r = localStorage.getItem(STORAGE_KEY);
+    if (r) {
+      const stored = JSON.parse(r);
+      const defaultIds = new Set(DEFAULT_FUTURE.map(f => f.id));
+      const storedById = Object.fromEntries((stored.futureItems||[]).map(f=>[f.id,f]));
+      const mergedDefaults = DEFAULT_FUTURE.map(def => ({ ...def, uses:(storedById[def.id]?.uses)||[] }));
+      const userAdded = (stored.futureItems||[]).filter(f => !defaultIds.has(f.id));
       return { ...stored, futureItems:[...mergedDefaults,...userAdded] };
     }
   } catch {}
@@ -80,15 +83,14 @@ export default function App() {
   const [nfTimes,setNfTimes] = useState("");
   const [nfType,setNfType]   = useState("limited");
   const [nfNote,setNfNote]   = useState("");
-  // Edit future item
-  const [editFutureItem,setEditFutureItem] = useState(null); // item being edited
-  // Edit/delete a logged use
-  const [editUseModal,setEditUseModal]     = useState(null); // {item, use}
-  // Report / AI coach
+  const [editFutureItem,setEditFutureItem] = useState(null);
+  const [editUseModal,setEditUseModal]     = useState(null);
   const [reportView,setReportView]   = useState(false);
   const [chatMsgs,setChatMsgs]       = useState([]);
   const [chatInput,setChatInput]     = useState("");
   const [chatLoading,setChatLoading] = useState(false);
+  // History view mode
+  const [historyTab,setHistoryTab]   = useState("monthly"); // "monthly" | "yearly"
   const chatEndRef = useRef(null);
 
   const now=new Date(); const currentYear=START_YEAR;
@@ -129,7 +131,7 @@ export default function App() {
   const totalEarned=effectiveBudget+monthEarns.reduce((s,e)=>s+e.amount,0);
   const remaining=parseFloat((totalEarned-totalSpent).toFixed(2));
   const isClosed=data.closedMonths.includes(monthKey(selMonth,currentYear));
-  function spentInCat(catId) { return monthTxns.filter(t=>t.catId===catId&&!t.isRollover).reduce((s,t)=>s+t.amount,0); }
+  function spentInCat(catId,txns) { return (txns||monthTxns).filter(t=>t.catId===catId&&!t.isRollover).reduce((s,t)=>s+t.amount,0); }
 
   function itemStats(item) {
     const elapsed=monthsElapsed(selMonth);
@@ -137,120 +139,84 @@ export default function App() {
     const uses=item.uses||[];
     const totalUsed=parseFloat(uses.reduce((s,u)=>s+u.amount,0).toFixed(2));
     const useCount=uses.length;
-    const annualAllowed=item.type==="recurring"?null:item.timesPerYear;
+    const annualAllowed=item.type==="monthly"?null:item.timesPerYear;
     const usesLeft=annualAllowed!==null?Math.max(0,annualAllowed-useCount):null;
     const balance=parseFloat((pool-totalUsed).toFixed(2));
     return {pool,totalUsed,useCount,annualAllowed,usesLeft,balance};
   }
 
-  // ── Build context string for AI ──
-  function buildFinancialContext() {
-    const catBreakdown = CATEGORIES.map(cat => {
-      const spent = spentInCat(cat.id);
-      const pct = Math.round(spent/cat.budget*100);
-      return `  ${cat.name}: spent $${spent.toFixed(2)} of $${cat.budget.toFixed(2)} budget (${pct}%)`;
-    }).join("\n");
-    const futureBreakdown = (data.futureItems||[]).map(item => {
-      const s = itemStats(item);
-      return `  ${item.name}: pool $${s.pool.toFixed(2)}, used $${s.totalUsed.toFixed(2)}, ${item.type==="limited"?`${s.usesLeft} uses left of ${item.timesPerYear}`:"monthly sub"}`;
-    }).join("\n");
-    return `
-Jai's Budget Snapshot — ${MONTHS[selMonth]} ${currentYear}:
-- Monthly income: $500 (chores + allowance)
-- Savings auto-deducted: $20/month
-- Future expenses auto-deducted: $${futureMonthlyTotal.toFixed(2)}/month
-- Spendable budget this month: $${effectiveBudget.toFixed(2)}
-- Total spent: $${totalSpent.toFixed(2)}
-- Remaining: $${remaining.toFixed(2)}
-- Month closed: ${isClosed?"yes":"no"}
-
-Spending by category:
-${catBreakdown}
-
-Future expense pools (${MONTHS[selMonth]}):
-${futureBreakdown}
-
-Savings jar total: $${data.savingsJar.toFixed(2)}
-All-time future uses logged: ${(data.futureItems||[]).reduce((s,f)=>s+(f.uses||[]).length,0)}
-`.trim();
+  // ── Monthly history stats helper ──
+  function monthStats(m, y) {
+    const txns = data.transactions.filter(t=>{const d=new Date(t.date);return d.getMonth()===m&&d.getFullYear()===y&&!t.isRollover;});
+    const earns = data.earnings.filter(e=>{const d=new Date(e.date);return d.getMonth()===m&&d.getFullYear()===y;});
+    const spent = txns.reduce((s,t)=>s+t.amount,0);
+    const extra = earns.reduce((s,e)=>s+e.amount,0);
+    const budget = effectiveBudget + extra;
+    const saved = data.savingsLog.filter(s=>s.type==="rollover"&&s.monthKey===monthKey(m,y)).reduce((s,e)=>s+e.amount,0);
+    return { spent:parseFloat(spent.toFixed(2)), budget:parseFloat(budget.toFixed(2)), saved:parseFloat(saved.toFixed(2)), txnCount:txns.length };
   }
 
-  // ── AI Report / Coach ──
+  // ── Build AI context ──
+  function buildFinancialContext() {
+    const catBreakdown = CATEGORIES.map(cat=>{
+      const spent=spentInCat(cat.id); const pct=Math.round(spent/cat.budget*100);
+      return `  ${cat.name}: $${spent.toFixed(2)} of $${cat.budget.toFixed(2)} (${pct}%)`;
+    }).join("\n");
+    const futureBreakdown = (data.futureItems||[]).map(item=>{
+      const s=itemStats(item);
+      return `  ${item.name}: ${item.type==="monthly"?"monthly sub $"+item.monthly : s.usesLeft+" uses left of "+item.timesPerYear}`;
+    }).join("\n");
+    return `Jai's Budget — ${MONTHS[selMonth]} ${currentYear}:
+- Spendable: $${effectiveBudget.toFixed(2)}/mo (after $${futureMonthlyTotal.toFixed(2)} future + $20 savings)
+- Spent: $${totalSpent.toFixed(2)}, Left: $${remaining.toFixed(2)}
+- Savings jar: $${data.savingsJar.toFixed(2)}
+Spending:
+${catBreakdown}
+Future items:
+${futureBreakdown}`;
+  }
+
+  // ── AI Coach ──
+  async function callAI(messages, systemPrompt) {
+    const isArtifact = window.location.hostname.includes("claude") || window.location.hostname === "localhost";
+    const url = isArtifact ? "https://api.anthropic.com/v1/messages" : "/api/coach";
+    const headers = { "Content-Type":"application/json" };
+    const body = { model:"claude-sonnet-4-20250514", max_tokens:1000, system:systemPrompt, messages };
+    const res = await fetch(url, { method:"POST", headers, body:JSON.stringify(body) });
+    const d = await res.json();
+    return d.content?.find(c=>c.type==="text")?.text || "Try again!";
+  }
+
   async function startReport() {
     setReportView(true);
-    if (chatMsgs.length > 0) return; // already loaded
+    if(chatMsgs.length>0) return;
     setChatLoading(true);
-    const ctx = buildFinancialContext();
-    const systemPrompt = `You are "Coach Jai" — a fun, hype, money-savvy coach for a kid named Jai who is around 12-14 years old. You sound like a mix between a podcast host and a cool social media finance influencer — energetic, encouraging, uses emojis naturally, casual but actually helpful. You give REAL money advice, celebrate wins, call out areas to improve, and make budgeting feel exciting not boring.
+    const systemPrompt = `You are "Coach Jai" — a fun, hype money coach for a kid named Jai (12-14 yrs). You sound like a podcast host meets finance influencer — energetic, encouraging, casual, uses emojis naturally. Give REAL advice based on actual numbers.
 
-Jai earns ~$500/month from chores (sometimes less if they miss some), automatically saves $20/month, and pre-allocates money for future fun things. The goal is to spend smart, save consistently, and hit fun goals like the Disney trip.
+${buildFinancialContext()}
 
-Here is Jai's current financial data:
-${ctx}
-
-When giving the opening report:
-- Open with hype and a headline-style summary (like a podcast intro)
-- Celebrate specific wins (categories under budget, money saved, etc.)
-- Flag any areas of concern clearly but kindly
-- Give 2-3 specific, actionable tips Jai can use THIS month
-- End with a motivating closer about a goal (Disney trip, savings jar, etc.)
-- Keep it conversational, use line breaks for readability
-- Total length: aim for ~250-350 words, punchy paragraphs
-
-After the opening report, Jai can ask follow-up questions. Keep answers short, specific to their data, and always end with encouragement or a tip.`;
-
+Opening report style: punchy podcast intro → celebrate wins → flag concerns kindly → 2-3 actionable tips → motivating closer about Disney or savings goal. ~250-300 words, short paragraphs.`;
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({
-          model:"claude-sonnet-4-20250514",
-          max_tokens:1000,
-          system: systemPrompt,
-          messages:[{role:"user",content:"Give me my monthly money report!"}]
-        })
-      });
-      const d = await res.json();
-      const text = d.content?.find(c=>c.type==="text")?.text || "Couldn't load report right now. Try again!";
+      const text = await callAI([{role:"user",content:"Give me my monthly money report!"}], systemPrompt);
       setChatMsgs([{role:"assistant",text}]);
-    } catch(e) {
-      setChatMsgs([{role:"assistant",text:"Oops! Couldn't connect right now. Make sure you're online and try again 🔌"}]);
-    }
+    } catch { setChatMsgs([{role:"assistant",text:"Couldn't connect. Make sure you're online! 🔌"}]); }
     setChatLoading(false);
   }
 
   async function sendChatMsg() {
-    const msg = chatInput.trim();
-    if (!msg||chatLoading) return;
-    const newMsgs = [...chatMsgs, {role:"user",text:msg}];
-    setChatMsgs(newMsgs);
-    setChatInput("");
-    setChatLoading(true);
-
-    const ctx = buildFinancialContext();
-    const systemPrompt = `You are "Coach Jai" — a fun, energetic money coach for a kid named Jai (12-14 yrs old). Sound like a podcast host mixed with a finance influencer. Be real, be helpful, use emojis naturally. Keep answers SHORT and punchy (under 120 words unless a list is needed). Always tie back to Jai's actual numbers.
-
-Jai's current financial data:
-${ctx}`;
-
-    const apiMsgs = newMsgs.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.text}));
-
+    const msg=chatInput.trim(); if(!msg||chatLoading) return;
+    const newMsgs=[...chatMsgs,{role:"user",text:msg}];
+    setChatMsgs(newMsgs); setChatInput(""); setChatLoading(true);
+    const systemPrompt = `You are "Coach Jai" — fun, energetic money coach for Jai (12-14 yrs). Short punchy answers under 120 words. Always tie to real numbers.\n\n${buildFinancialContext()}`;
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:systemPrompt,messages:apiMsgs})
-      });
-      const d = await res.json();
-      const text = d.content?.find(c=>c.type==="text")?.text || "Hmm, try asking again!";
+      const apiMsgs=newMsgs.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.text}));
+      const text=await callAI(apiMsgs, systemPrompt);
       setChatMsgs(prev=>[...prev,{role:"assistant",text}]);
-    } catch {
-      setChatMsgs(prev=>[...prev,{role:"assistant",text:"Connection issue! Try again 🔌"}]);
-    }
+    } catch { setChatMsgs(prev=>[...prev,{role:"assistant",text:"Connection issue! 🔌"}]); }
     setChatLoading(false);
   }
 
-  // ── Standard actions ──
+  // ── Actions ──
   function addSpend() {
     const val=parseFloat(amount); if(!val||val<=0||!selectedCat) return;
     setData(d=>({...d,transactions:[{id:Date.now(),catId:selectedCat,amount:val,note:note||CATEGORIES.find(c=>c.id===selectedCat)?.name,date:new Date().toISOString()},...d.transactions]}));
@@ -288,29 +254,26 @@ ${ctx}`;
     setData(d=>({...d,futureItems:d.futureItems.map(f=>f.id===useModal.id?{...f,uses:[entry,...(f.uses||[])]}:f)}));
     showToast(`✅ ${useModal.name} logged!`,"#00C9A7"); setUseAmt(""); setUseNote(""); setUseModal(null);
   }
-  function deleteUse(itemId, useId) {
+  function deleteUse(itemId,useId) {
     setData(d=>({...d,futureItems:d.futureItems.map(f=>f.id===itemId?{...f,uses:(f.uses||[]).filter(u=>u.id!==useId)}:f)}));
-    showToast("Use removed!","#aaa"); setEditUseModal(null);
+    showToast("Removed!","#aaa"); setEditUseModal(null);
   }
   function addFutureItem() {
     if(!nfName||!nfCost||!nfTimes) return;
     const cost=parseFloat(nfCost),times=parseFloat(nfTimes);
-    const monthly=nfType==="recurring"?cost:parseFloat((cost*times/12).toFixed(2));
+    const monthly=nfType==="monthly"?cost:parseFloat((cost*times/12).toFixed(2));
     setData(d=>({...d,futureItems:[...d.futureItems,{id:`fe${Date.now()}`,name:nfName,emoji:nfEmoji||"🎯",costPerUse:cost,timesPerYear:times,monthly,type:nfType,note:nfNote||`$${cost} · ${times}x/year`,uses:[]}]}));
     showToast("✨ Added!","#6C63FF");
     setNfName(""); setNfEmoji("🎯"); setNfCost(""); setNfTimes(""); setNfType("limited"); setNfNote(""); setAddFutureModal(false);
   }
   function saveFutureItemEdit() {
     if(!editFutureItem) return;
-    const cost=parseFloat(editFutureItem.costPerUse)||0, times=parseFloat(editFutureItem.timesPerYear)||1;
-    const monthly=editFutureItem.type==="recurring"?cost:parseFloat((cost*times/12).toFixed(2));
+    const cost=parseFloat(editFutureItem.costPerUse)||0,times=parseFloat(editFutureItem.timesPerYear)||1;
+    const monthly=editFutureItem.type==="monthly"?cost:parseFloat((cost*times/12).toFixed(2));
     setData(d=>({...d,futureItems:d.futureItems.map(f=>f.id===editFutureItem.id?{...editFutureItem,monthly}:f)}));
     showToast("Updated! ✅"); setEditFutureItem(null);
   }
-  function deleteFutureItem(id) {
-    setData(d=>({...d,futureItems:d.futureItems.filter(f=>f.id!==id)}));
-    showToast("Removed!","#aaa"); setEditFutureItem(null);
-  }
+  function deleteFutureItem(id) { setData(d=>({...d,futureItems:d.futureItems.filter(f=>f.id!==id)})); showToast("Removed!","#aaa"); setEditFutureItem(null); }
   function saveEditTxn() {
     const val=parseFloat(editTxn.amount); if(!val||val<=0) return;
     setData(d=>({...d,transactions:d.transactions.map(t=>t.id===editTxn.id?{...t,amount:val,note:editTxn.note}:t)}));
@@ -319,13 +282,18 @@ ${ctx}`;
   function deleteTxn(id) { setData(d=>({...d,transactions:d.transactions.filter(t=>t.id!==id)})); showToast("Deleted!","#aaa"); setEditTxn(null); }
 
   const avail=availableMonths();
-  const allHistory=[...data.transactions.map(t=>({...t,kind:"spend"})),...data.earnings.map(e=>({...e,kind:"earn"}))].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,60);
+  const allHistory=[...data.transactions.map(t=>({...t,kind:"spend"})),...data.earnings.map(e=>({...e,kind:"earn"}))].sort((a,b)=>new Date(b.date)-new Date(a.date));
 
-  // ── Shared styles ──
+  // Shared styles
   const OL={position:"fixed",inset:0,background:"rgba(0,0,0,.56)",zIndex:999,display:"flex",alignItems:"center",justifyContent:"center",padding:16,animation:"fadeIn .2s"};
   const MB={background:"#fff",borderRadius:26,padding:"22px 18px",maxWidth:390,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,.3)",maxHeight:"88vh",overflowY:"auto"};
   const INP={width:"100%",padding:"11px 13px",borderRadius:12,border:"2px solid #e8e8e8",fontSize:15,fontWeight:700,fontFamily:"inherit",outline:"none",boxSizing:"border-box",color:"#333",marginBottom:8};
   const BTN=(bg,col="#fff",mb=8)=>({width:"100%",padding:"13px",background:bg,color:col,border:"none",borderRadius:13,fontSize:14,fontWeight:900,cursor:"pointer",fontFamily:"inherit",marginBottom:mb});
+
+  // ── Future items grouped ──
+  const monthlyItems = (data.futureItems||[]).filter(f=>f.type==="monthly");
+  const limitedItems = (data.futureItems||[]).filter(f=>f.type==="limited");
+  const bigGoalItems = (data.futureItems||[]).filter(f=>f.type==="biggoal");
 
   return (
     <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#667eea,#764ba2)",fontFamily:"'Nunito',system-ui,sans-serif"}}>
@@ -342,83 +310,58 @@ ${ctx}`;
 
       {toast&&<div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",background:toast.color,color:"#fff",borderRadius:999,padding:"11px 26px",fontWeight:800,fontSize:15,zIndex:1002,boxShadow:"0 8px 30px rgba(0,0,0,.2)",animation:"slideDown .3s ease",whiteSpace:"nowrap"}}>{toast.msg}</div>}
 
-      {/* ══ REPORT / AI COACH VIEW ══ */}
+      {/* ══ COACH REPORT VIEW ══ */}
       {reportView&&(
         <div style={{position:"fixed",inset:0,zIndex:1000,background:"#0f0c29",display:"flex",flexDirection:"column",maxWidth:430,margin:"0 auto"}}>
-          {/* Report header */}
           <div style={{background:"linear-gradient(135deg,#1a1a2e,#16213e)",padding:"18px 18px 14px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
             <div>
               <div style={{fontWeight:900,fontSize:17,color:"#fff"}}>🎙️ Coach Jai</div>
               <div style={{fontWeight:600,fontSize:11,color:"rgba(255,255,255,.5)"}}>Your personal money hype coach</div>
             </div>
-            <button onClick={()=>setReportView(false)} className="bp" style={{background:"rgba(255,255,255,.1)",border:"none",borderRadius:999,padding:"8px 16px",color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>← Back</button>
+            <button onClick={()=>setReportView(false)} className="bp" style={{background:"rgba(255,255,255,.1)",border:"none",borderRadius:999,padding:"8px 16px",color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>← Back</button>
           </div>
-
-          {/* Chat messages */}
           <div style={{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}}>
             {chatMsgs.length===0&&!chatLoading&&(
-              <div style={{textAlign:"center",padding:"40px 20px",color:"rgba(255,255,255,.4)"}}>
+              <div style={{textAlign:"center",padding:"40px 20px"}}>
                 <div style={{fontSize:48,marginBottom:10}}>🎙️</div>
-                <div style={{fontWeight:800,fontSize:15,color:"rgba(255,255,255,.6)"}}>Coach Jai is loading your report...</div>
+                <div style={{fontWeight:800,fontSize:15,color:"rgba(255,255,255,.6)"}}>Loading your report...</div>
               </div>
             )}
             {chatMsgs.map((m,i)=>(
               <div key={i} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
                 {m.role==="assistant"&&<div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.4)",marginBottom:4,marginLeft:4}}>🎙️ Coach Jai</div>}
-                <div style={{
-                  maxWidth:"88%",padding:"12px 15px",borderRadius:m.role==="user"?"18px 18px 4px 18px":"18px 18px 18px 4px",
-                  background:m.role==="user"?"linear-gradient(135deg,#667eea,#764ba2)":"rgba(255,255,255,.08)",
-                  color:"#fff",fontSize:14,fontWeight:600,lineHeight:1.6,
-                  border:m.role==="assistant"?"1px solid rgba(255,255,255,.08)":"none",
-                  whiteSpace:"pre-wrap",
-                }}>
+                <div style={{maxWidth:"88%",padding:"12px 15px",borderRadius:m.role==="user"?"18px 18px 4px 18px":"18px 18px 18px 4px",background:m.role==="user"?"linear-gradient(135deg,#667eea,#764ba2)":"rgba(255,255,255,.08)",color:"#fff",fontSize:14,fontWeight:600,lineHeight:1.6,border:m.role==="assistant"?"1px solid rgba(255,255,255,.08)":"none",whiteSpace:"pre-wrap"}}>
                   {m.text}
                 </div>
               </div>
             ))}
             {chatLoading&&(
-              <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+              <div style={{display:"flex"}}>
                 <div style={{background:"rgba(255,255,255,.08)",borderRadius:"18px 18px 18px 4px",padding:"12px 18px",border:"1px solid rgba(255,255,255,.08)"}}>
-                  <div className="typing" style={{color:"rgba(255,255,255,.6)",fontSize:18,letterSpacing:3}}>
-                    <span>●</span><span>●</span><span>●</span>
-                  </div>
+                  <div className="typing" style={{color:"rgba(255,255,255,.6)",fontSize:18,letterSpacing:3}}><span>●</span><span>●</span><span>●</span></div>
                 </div>
               </div>
             )}
             <div ref={chatEndRef}/>
           </div>
-
-          {/* Suggested questions */}
           {chatMsgs.length===1&&!chatLoading&&(
             <div style={{padding:"0 14px 10px",flexShrink:0}}>
               <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.4)",marginBottom:7}}>ASK ME ANYTHING:</div>
               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                {["Where am I overspending?","How close am I to Disney?","What should I cut back on?","How much will I save by Dec?","Am I on track this month?"].map(q=>(
-                  <button key={q} onClick={()=>{setChatInput(q);}} className="bp" style={{background:"rgba(255,255,255,.08)",color:"rgba(255,255,255,.8)",border:"1px solid rgba(255,255,255,.15)",borderRadius:999,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>
-                    {q}
-                  </button>
+                {["Where am I overspending?","How close am I to Disney?","What should I cut back?","How much will I save by Dec?","Am I on track?"].map(q=>(
+                  <button key={q} onClick={()=>setChatInput(q)} className="bp" style={{background:"rgba(255,255,255,.08)",color:"rgba(255,255,255,.8)",border:"1px solid rgba(255,255,255,.15)",borderRadius:999,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>{q}</button>
                 ))}
               </div>
             </div>
           )}
-
-          {/* Input bar */}
           <div style={{padding:"12px 14px 16px",background:"rgba(0,0,0,.3)",flexShrink:0,display:"flex",gap:8}}>
-            <input
-              value={chatInput} onChange={e=>setChatInput(e.target.value)}
-              onKeyDown={e=>e.key==="Enter"&&sendChatMsg()}
-              placeholder="Ask Coach Jai anything..."
-              style={{flex:1,padding:"12px 15px",borderRadius:999,border:"1px solid rgba(255,255,255,.2)",background:"rgba(255,255,255,.08)",color:"#fff",fontSize:14,fontWeight:600,fontFamily:"inherit",outline:"none"}}
-            />
-            <button onClick={sendChatMsg} disabled={!chatInput.trim()||chatLoading} className="bp" style={{background:chatInput.trim()&&!chatLoading?"linear-gradient(135deg,#667eea,#764ba2)":"rgba(255,255,255,.1)",color:"#fff",border:"none",borderRadius:999,padding:"0 18px",fontSize:18,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0,opacity:chatInput.trim()&&!chatLoading?1:.5}}>
-              →
-            </button>
+            <input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendChatMsg()} placeholder="Ask Coach Jai anything..." style={{flex:1,padding:"12px 15px",borderRadius:999,border:"1px solid rgba(255,255,255,.2)",background:"rgba(255,255,255,.08)",color:"#fff",fontSize:14,fontWeight:600,fontFamily:"inherit",outline:"none"}}/>
+            <button onClick={sendChatMsg} disabled={!chatInput.trim()||chatLoading} className="bp" style={{background:chatInput.trim()&&!chatLoading?"linear-gradient(135deg,#667eea,#764ba2)":"rgba(255,255,255,.1)",color:"#fff",border:"none",borderRadius:999,padding:"0 18px",fontSize:18,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0,opacity:chatInput.trim()&&!chatLoading?1:.5}}>→</button>
           </div>
         </div>
       )}
 
       {/* ══ MODALS ══ */}
-
       {rolloverModal&&<div style={OL}><div style={MB}><div style={{textAlign:"center"}}>
         <div style={{fontSize:50,marginBottom:6}}>🐷</div>
         <div style={{fontWeight:900,fontSize:18,color:"#333",marginBottom:7}}>{MONTHS[rolloverModal.m]} ended!</div>
@@ -439,139 +382,165 @@ ${ctx}`;
         <button onClick={()=>setJarModal(false)} className="bp" style={BTN("#f5f5f5","#999",0)}>Cancel</button>
       </div></div>}
 
-      {/* Future Panel */}
+      {/* ── Future Panel (simplified) ── */}
       {futureModal&&<div style={OL}><div style={{...MB,maxWidth:420}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:11}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
           <div style={{fontWeight:900,fontSize:18,color:"#333"}}>🎯 Future Expenses</div>
-          <button onClick={()=>setFutureModal(false)} className="bp" style={{background:"#f0f0f0",border:"none",borderRadius:999,width:28,height:28,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>×</button>
+          <button onClick={()=>setFutureModal(false)} className="bp" style={{background:"#f0f0f0",border:"none",borderRadius:999,width:28,height:28,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",padding:0,marginBottom:0}}>×</button>
         </div>
-        <div style={{background:"#F0EFFF",borderRadius:13,padding:"9px 13px",marginBottom:12,fontSize:12,color:"#6C63FF",fontWeight:700}}>
-          💰 <span style={{fontWeight:900}}>${futureMonthlyTotal.toFixed(2)}/mo</span> auto-set aside from your $500
-        </div>
-        <div style={{display:"flex",flexDirection:"column",gap:9,marginBottom:11}}>
-          {(data.futureItems||[]).map(item=>{
-            const s=itemStats(item);
-            const isRec=item.type==="recurring";
-            const poolPct=s.pool>0?Math.min(100,(s.totalUsed/s.pool)*100):0;
-            const overPool=s.balance<0;
-            const allUsed=!isRec&&s.usesLeft===0;
-            return (
-              <div key={item.id} style={{background:"#fff",borderRadius:15,padding:"12px 13px",boxShadow:"0 2px 10px rgba(0,0,0,.06)",borderLeft:`4px solid ${allUsed?"#ccc":"#6C63FF"}`,opacity:allUsed?.7:1}}>
-                <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:7}}>
-                  <div style={{display:"flex",alignItems:"center",gap:7,flex:1}}>
-                    <span style={{fontSize:20}}>{item.emoji}</span>
-                    <div style={{flex:1}}>
-                      <div style={{fontWeight:800,fontSize:13,color:"#333"}}>{item.name}</div>
-                      <div style={{fontWeight:600,fontSize:10,color:"#aaa"}}>{item.note} · <span style={{color:"#6C63FF"}}>${item.monthly.toFixed(2)}/mo</span></div>
+
+        {/* Monthly subscriptions */}
+        {monthlyItems.length>0&&<>
+          <div style={{fontWeight:800,fontSize:12,color:"#aaa",letterSpacing:.5,textTransform:"uppercase",marginBottom:8}}>Every Month</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+            {monthlyItems.map(item=>{
+              const uses=item.uses||[];
+              const thisMonthUsed=uses.filter(u=>{const d=new Date(u.date);return d.getMonth()===selMonth&&d.getFullYear()===currentYear;}).length;
+              const doneThisMonth=thisMonthUsed>0;
+              return(
+                <div key={item.id} style={{background:"#fff",borderRadius:14,padding:"13px 14px",boxShadow:"0 2px 8px rgba(0,0,0,.05)",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <span style={{fontSize:24}}>{item.emoji}</span>
+                    <div>
+                      <div style={{fontWeight:800,fontSize:15,color:"#333"}}>{item.name}</div>
+                      <div style={{fontWeight:600,fontSize:12,color:doneThisMonth?"#00A085":"#aaa"}}>{doneThisMonth?"✅ Done this month":"Due this month"}</div>
                     </div>
                   </div>
-                  <div style={{display:"flex",gap:5,alignItems:"center",flexShrink:0}}>
-                    {!isRec&&<div style={{background:allUsed?"#f0f0f0":s.usesLeft<=1?"#FFF0F0":"#E6FFF9",borderRadius:9,padding:"3px 9px",textAlign:"center",minWidth:44}}>
-                      <div style={{fontWeight:900,fontSize:17,color:allUsed?"#bbb":s.usesLeft<=1?"#FF6B6B":"#00A085",lineHeight:1}}>{s.usesLeft}</div>
-                      <div style={{fontWeight:700,fontSize:9,color:allUsed?"#bbb":s.usesLeft<=1?"#FF6B6B":"#00A085"}}>left</div>
-                    </div>}
-                    {/* Edit button */}
-                    <button onClick={()=>{setEditFutureItem({...item});setFutureModal(false);}} className="bp" style={{background:"#f5f5f5",border:"none",borderRadius:9,padding:"5px 9px",fontSize:13,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>✏️</button>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <button onClick={()=>{setEditFutureItem({...item});setFutureModal(false);}} className="bp" style={{background:"#f5f5f5",border:"none",borderRadius:9,padding:"6px 10px",fontSize:13,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>✏️</button>
+                    <button onClick={()=>{setUseModal(item);setUseAmt(String(item.costPerUse));setFutureModal(false);}} className="bp" style={{background:doneThisMonth?"#f0f0f0":"linear-gradient(135deg,#6C63FF,#4a41dd)",color:doneThisMonth?"#bbb":"#fff",border:"none",borderRadius:9,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>
+                      {doneThisMonth?"Log again":"Log it"}
+                    </button>
                   </div>
                 </div>
-                <div style={{marginBottom:5}}>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:10,fontWeight:700,color:"#aaa",marginBottom:2}}>
-                    <span>Pool: <span style={{color:overPool?"#FF6B6B":"#6C63FF",fontWeight:900}}>${s.balance.toFixed(2)} left</span></span>
-                    <span>${s.totalUsed.toFixed(2)} used / ${s.pool.toFixed(2)}</span>
+              );
+            })}
+          </div>
+        </>}
+
+        {/* Limited / seasonal activities */}
+        {limitedItems.length>0&&<>
+          <div style={{fontWeight:800,fontSize:12,color:"#aaa",letterSpacing:.5,textTransform:"uppercase",marginBottom:8}}>Activities This Year</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+            {limitedItems.map(item=>{
+              const s=itemStats(item);
+              const allUsed=s.usesLeft===0;
+              return(
+                <div key={item.id} style={{background:"#fff",borderRadius:14,padding:"13px 14px",boxShadow:"0 2px 8px rgba(0,0,0,.05)",display:"flex",alignItems:"center",justifyContent:"space-between",opacity:allUsed?.65:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <span style={{fontSize:24}}>{item.emoji}</span>
+                    <div>
+                      <div style={{fontWeight:800,fontSize:15,color:"#333"}}>{item.name}</div>
+                      <div style={{fontWeight:700,fontSize:13,color:allUsed?"#bbb":s.usesLeft<=1?"#FF6B6B":"#00A085"}}>
+                        {allUsed?`🎉 All ${item.timesPerYear}x done!`:`${s.usesLeft} of ${item.timesPerYear} left`}
+                      </div>
+                    </div>
                   </div>
-                  <div style={{background:"#f0f0f0",borderRadius:999,height:6}}>
-                    <div style={{width:`${poolPct}%`,background:overPool?"#FF6B6B":allUsed?"#bbb":"#6C63FF",height:6,borderRadius:999,transition:"width .4s"}}/>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <button onClick={()=>{setEditFutureItem({...item});setFutureModal(false);}} className="bp" style={{background:"#f5f5f5",border:"none",borderRadius:9,padding:"6px 10px",fontSize:13,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>✏️</button>
+                    {!allUsed&&<button onClick={()=>{setUseModal(item);setUseAmt(String(item.costPerUse));setFutureModal(false);}} className="bp" style={{background:"linear-gradient(135deg,#6C63FF,#4a41dd)",color:"#fff",border:"none",borderRadius:9,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>Used it!</button>}
                   </div>
                 </div>
-                {/* Uses log with delete */}
-                {(item.uses||[]).length>0&&(
-                  <div style={{borderTop:"1px solid #f5f5f5",paddingTop:5,marginTop:3,marginBottom:5}}>
-                    {(item.uses||[]).slice(0,3).map(u=>{
-                      const d=new Date(u.date);
-                      return (
-                        <div key={u.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"2px 0"}}>
-                          <span style={{fontSize:11,fontWeight:700,color:"#00A085"}}>✅ {MONTHS[d.getMonth()]} {d.getDate()} — {u.note} (${u.amount.toFixed(2)})</span>
-                          <button onClick={()=>setEditUseModal({item,use:u})} className="bp" style={{background:"none",border:"none",cursor:"pointer",fontSize:13,padding:"0 3px",marginBottom:0,width:"auto",color:"#FF6B6B"}}>✕</button>
-                        </div>
-                      );
-                    })}
-                    {(item.uses||[]).length>3&&<div style={{fontSize:10,color:"#bbb",fontWeight:700}}>+{(item.uses||[]).length-3} more</div>}
+              );
+            })}
+          </div>
+        </>}
+
+        {/* Big Goals */}
+        {bigGoalItems.length>0&&<>
+          <div style={{fontWeight:800,fontSize:12,color:"#aaa",letterSpacing:.5,textTransform:"uppercase",marginBottom:8}}>Big Goals 🌟</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+            {bigGoalItems.map(item=>{
+              const s=itemStats(item);
+              const allUsed=s.usesLeft===0;
+              // Progress toward goal
+              const pct=Math.min(100,Math.round((s.pool/item.costPerUse)*100));
+              return(
+                <div key={item.id} style={{background:"linear-gradient(135deg,#E6FFF9,#f0fff8)",borderRadius:14,padding:"14px 15px",boxShadow:"0 2px 8px rgba(0,0,0,.05)",border:"2px solid #00C9A733"}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      <span style={{fontSize:26}}>{item.emoji}</span>
+                      <div>
+                        <div style={{fontWeight:900,fontSize:15,color:"#333"}}>{item.name}</div>
+                        <div style={{fontWeight:600,fontSize:12,color:"#aaa"}}>{item.note}</div>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={()=>{setEditFutureItem({...item});setFutureModal(false);}} className="bp" style={{background:"rgba(0,201,167,.15)",border:"none",borderRadius:9,padding:"6px 10px",fontSize:13,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>✏️</button>
+                      {!allUsed&&<button onClick={()=>{setUseModal(item);setUseAmt(String(item.costPerUse));setFutureModal(false);}} className="bp" style={{background:"linear-gradient(135deg,#00C9A7,#00A085)",color:"#fff",border:"none",borderRadius:9,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>Book it!</button>}
+                    </div>
                   </div>
-                )}
-                {!allUsed&&(
-                  <button onClick={()=>{setUseModal(item);setUseAmt(String(item.costPerUse));setFutureModal(false);}} className="bp" style={{...BTN(s.balance<item.costPerUse?"#FFF0F0":"linear-gradient(135deg,#6C63FF,#4a41dd)",s.balance<item.costPerUse?"#FF6B6B":"#fff"),width:"100%",padding:"8px",fontSize:12,marginBottom:0}}>
-                    {s.balance<item.costPerUse?"⚠️ Low funds — log anyway":"✅ I used this!"}
-                  </button>
-                )}
-                {allUsed&&<div style={{fontSize:11,color:"#bbb",fontWeight:700,textAlign:"center",paddingTop:2}}>🎉 All {item.timesPerYear}x used this year!</div>}
-              </div>
-            );
-          })}
-        </div>
-        <button onClick={()=>{setAddFutureModal(true);setFutureModal(false);}} className="bp" style={BTN("linear-gradient(135deg,#6C63FF,#4a41dd)")}>+ Add Future Expense</button>
+                  {/* Savings progress */}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
+                    <span style={{fontWeight:700,fontSize:12,color:"#00A085"}}>${s.pool.toFixed(0)} saved of ${item.costPerUse.toLocaleString()}</span>
+                    <span style={{fontWeight:800,fontSize:13,color:"#00A085"}}>{pct}%</span>
+                  </div>
+                  <div style={{background:"rgba(0,0,0,.08)",borderRadius:999,height:8}}>
+                    <div style={{width:`${pct}%`,background:"linear-gradient(90deg,#00C9A7,#00A085)",height:8,borderRadius:999,transition:"width .5s"}}/>
+                  </div>
+                  {allUsed&&<div style={{fontWeight:800,fontSize:13,color:"#00A085",marginTop:6,textAlign:"center"}}>🎉 Done! Dream trip complete!</div>}
+                </div>
+              );
+            })}
+          </div>
+        </>}
+
+        <button onClick={()=>{setAddFutureModal(true);setFutureModal(false);}} className="bp" style={BTN("linear-gradient(135deg,#6C63FF,#4a41dd)")}>+ Add Expense</button>
         <button onClick={()=>setFutureModal(false)} className="bp" style={BTN("#f5f5f5","#999",0)}>Close</button>
       </div></div>}
 
       {/* Log Use Modal */}
       {useModal&&<div style={OL}><div style={MB}>
-        {(()=>{const s=itemStats(useModal); return(<>
-          <div style={{textAlign:"center",marginBottom:12}}>
-            <div style={{fontSize:42}}>{useModal.emoji}</div>
-            <div style={{fontWeight:900,fontSize:18,color:"#333",marginTop:3}}>I used {useModal.name}!</div>
-            <div style={{fontWeight:600,fontSize:11,color:"#aaa",marginTop:2}}>{useModal.type==="limited"?`${s.usesLeft} uses left · pool $${s.balance.toFixed(2)}`:`Pool: $${s.balance.toFixed(2)}`}</div>
+        <div style={{textAlign:"center",marginBottom:14}}>
+          <div style={{fontSize:44}}>{useModal.emoji}</div>
+          <div style={{fontWeight:900,fontSize:18,color:"#333",marginTop:4}}>
+            {useModal.type==="monthly"?"Logging this month's "+useModal.name:"I used "+useModal.name+"!"}
           </div>
-          {s.balance<useModal.costPerUse&&<div style={{background:"#FFF0F0",borderRadius:11,padding:"9px 13px",marginBottom:11,fontSize:12,fontWeight:700,color:"#FF6B6B"}}>⚠️ Pool only has ${s.balance.toFixed(2)}, this costs ~${useModal.costPerUse}!</div>}
-          <input type="number" value={useAmt} onChange={e=>setUseAmt(e.target.value)} placeholder={`$${useModal.costPerUse}`} style={{...INP,fontSize:20,fontWeight:800}}/>
-          <input type="text" value={useNote} onChange={e=>setUseNote(e.target.value)} placeholder="Any details? (optional)" style={INP}/>
-          <button onClick={logUse} className="bp" style={BTN("linear-gradient(135deg,#00C9A7,#00A085)")}>✅ Log this use</button>
-          <button onClick={()=>{setUseModal(null);setFutureModal(true);}} className="bp" style={BTN("#f5f5f5","#999",0)}>← Back</button>
-        </>);})()}
+        </div>
+        <input type="number" value={useAmt} onChange={e=>setUseAmt(e.target.value)} placeholder={`$${useModal.costPerUse}`} style={{...INP,fontSize:20,fontWeight:800}}/>
+        <input type="text" value={useNote} onChange={e=>setUseNote(e.target.value)} placeholder="Any details? (optional)" style={INP}/>
+        <button onClick={logUse} className="bp" style={BTN("linear-gradient(135deg,#00C9A7,#00A085)")}>✅ Log it</button>
+        <button onClick={()=>{setUseModal(null);setFutureModal(true);}} className="bp" style={BTN("#f5f5f5","#999",0)}>← Back</button>
       </div></div>}
 
-      {/* Edit Use Modal (delete logged use) */}
+      {/* Edit Use Modal */}
       {editUseModal&&<div style={OL}><div style={MB}>
-        <div style={{fontWeight:900,fontSize:17,color:"#333",marginBottom:5}}>Remove this use?</div>
+        <div style={{fontWeight:900,fontSize:17,color:"#333",marginBottom:5}}>Remove this?</div>
         <div style={{background:"#f5f5f5",borderRadius:12,padding:"11px 14px",marginBottom:14}}>
           <div style={{fontWeight:800,fontSize:14,color:"#333"}}>{editUseModal.item.emoji} {editUseModal.item.name}</div>
           <div style={{fontWeight:700,fontSize:13,color:"#666",marginTop:2}}>{editUseModal.use.note} — ${editUseModal.use.amount.toFixed(2)}</div>
           <div style={{fontWeight:600,fontSize:11,color:"#aaa",marginTop:2}}>{new Date(editUseModal.use.date).toLocaleDateString()}</div>
         </div>
-        <button onClick={()=>deleteUse(editUseModal.item.id,editUseModal.use.id)} className="bp" style={BTN("linear-gradient(135deg,#FF6B6B,#e05050)")}>🗑️ Yes, remove it</button>
+        <button onClick={()=>deleteUse(editUseModal.item.id,editUseModal.use.id)} className="bp" style={BTN("linear-gradient(135deg,#FF6B6B,#e05050)")}>🗑️ Remove it</button>
         <button onClick={()=>{setEditUseModal(null);setFutureModal(true);}} className="bp" style={BTN("#f5f5f5","#999",0)}>Keep it</button>
       </div></div>}
 
       {/* Edit Future Item Modal */}
       {editFutureItem&&<div style={OL}><div style={MB}>
         <div style={{fontWeight:900,fontSize:18,color:"#333",marginBottom:14}}>✏️ Edit {editFutureItem.name}</div>
-        <div style={{display:"flex",gap:7,marginBottom:0}}>
+        <div style={{display:"flex",gap:7}}>
           <input type="text" value={editFutureItem.emoji} onChange={e=>setEditFutureItem({...editFutureItem,emoji:e.target.value})} style={{...INP,width:50,textAlign:"center",fontSize:22,padding:"9px 5px"}}/>
           <input type="text" value={editFutureItem.name} onChange={e=>setEditFutureItem({...editFutureItem,name:e.target.value})} style={{...INP,flex:1}}/>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:0}}>
-          {["limited","recurring"].map(t=><button key={t} onClick={()=>setEditFutureItem({...editFutureItem,type:t})} className="bp" style={{padding:"9px",borderRadius:12,border:`2px solid ${editFutureItem.type===t?"#6C63FF":"#eee"}`,background:editFutureItem.type===t?"#F0EFFF":"#fafafa",fontWeight:800,fontSize:11,color:editFutureItem.type===t?"#6C63FF":"#bbb",cursor:"pointer",fontFamily:"inherit",marginBottom:8}}>
-            {t==="limited"?"🎯 Limited":"🔄 Monthly"}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:8}}>
+          {["monthly","limited","biggoal"].map(t=><button key={t} onClick={()=>setEditFutureItem({...editFutureItem,type:t})} className="bp" style={{padding:"8px 4px",borderRadius:10,border:`2px solid ${editFutureItem.type===t?"#6C63FF":"#eee"}`,background:editFutureItem.type===t?"#F0EFFF":"#fafafa",fontWeight:800,fontSize:11,color:editFutureItem.type===t?"#6C63FF":"#bbb",cursor:"pointer",fontFamily:"inherit",marginBottom:8}}>
+            {t==="monthly"?"🔄 Monthly":t==="limited"?"🎯 Activity":"🌟 Big Goal"}
           </button>)}
         </div>
-        <div style={{fontWeight:700,fontSize:11,color:"#aaa",marginBottom:4}}>COST PER USE ($)</div>
-        <input type="number" value={editFutureItem.costPerUse} onChange={e=>setEditFutureItem({...editFutureItem,costPerUse:e.target.value})} style={INP}/>
-        <div style={{fontWeight:700,fontSize:11,color:"#aaa",marginBottom:4}}>TIMES PER YEAR</div>
-        <input type="number" value={editFutureItem.timesPerYear} onChange={e=>setEditFutureItem({...editFutureItem,timesPerYear:e.target.value})} style={INP}/>
-        <div style={{fontWeight:700,fontSize:11,color:"#aaa",marginBottom:4}}>NOTE</div>
-        <input type="text" value={editFutureItem.note} onChange={e=>setEditFutureItem({...editFutureItem,note:e.target.value})} style={INP}/>
-        {editFutureItem.costPerUse&&editFutureItem.timesPerYear&&<div style={{background:"#F0EFFF",borderRadius:11,padding:"8px 13px",marginBottom:9,fontSize:12,fontWeight:700,color:"#6C63FF"}}>
-          New monthly set-aside: <span style={{fontWeight:900}}>${(parseFloat(editFutureItem.costPerUse||0)*parseFloat(editFutureItem.timesPerYear||0)/12).toFixed(2)}/mo</span>
-        </div>}
-        <button onClick={saveFutureItemEdit} className="bp" style={BTN("linear-gradient(135deg,#6C63FF,#4a41dd)")}>Save Changes ✅</button>
-        <button onClick={()=>deleteFutureItem(editFutureItem.id)} className="bp" style={BTN("linear-gradient(135deg,#FF6B6B,#e05050)")}>🗑️ Delete this item</button>
+        <input type="number" value={editFutureItem.costPerUse} onChange={e=>setEditFutureItem({...editFutureItem,costPerUse:e.target.value})} placeholder="Cost per use" style={INP}/>
+        <input type="number" value={editFutureItem.timesPerYear} onChange={e=>setEditFutureItem({...editFutureItem,timesPerYear:e.target.value})} placeholder="Times per year" style={INP}/>
+        <input type="text" value={editFutureItem.note} onChange={e=>setEditFutureItem({...editFutureItem,note:e.target.value})} placeholder="Note" style={INP}/>
+        <button onClick={saveFutureItemEdit} className="bp" style={BTN("linear-gradient(135deg,#6C63FF,#4a41dd)")}>Save ✅</button>
+        <button onClick={()=>deleteFutureItem(editFutureItem.id)} className="bp" style={BTN("linear-gradient(135deg,#FF6B6B,#e05050)")}>🗑️ Delete</button>
         <button onClick={()=>{setEditFutureItem(null);setFutureModal(true);}} className="bp" style={BTN("#f5f5f5","#999",0)}>← Back</button>
       </div></div>}
 
       {/* Add Future Modal */}
       {addFutureModal&&<div style={OL}><div style={MB}>
         <div style={{fontWeight:900,fontSize:18,color:"#333",marginBottom:12}}>✨ New Future Expense</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:11}}>
-          {["limited","recurring"].map(t=><button key={t} onClick={()=>setNfType(t)} className="bp" style={{padding:"10px",borderRadius:12,border:`2px solid ${nfType===t?"#6C63FF":"#eee"}`,background:nfType===t?"#F0EFFF":"#fafafa",fontWeight:800,fontSize:11,color:nfType===t?"#6C63FF":"#bbb",cursor:"pointer",fontFamily:"inherit",marginBottom:0}}>
-            {t==="limited"?"🎯 Limited (X/yr)":"🔄 Monthly sub"}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:11}}>
+          {["monthly","limited","biggoal"].map(t=><button key={t} onClick={()=>setNfType(t)} className="bp" style={{padding:"9px 4px",borderRadius:11,border:`2px solid ${nfType===t?"#6C63FF":"#eee"}`,background:nfType===t?"#F0EFFF":"#fafafa",fontWeight:800,fontSize:11,color:nfType===t?"#6C63FF":"#bbb",cursor:"pointer",fontFamily:"inherit",marginBottom:0}}>
+            {t==="monthly"?"🔄 Monthly":t==="limited"?"🎯 Activity":"🌟 Big Goal"}
           </button>)}
         </div>
         <div style={{display:"flex",gap:7}}>
@@ -579,8 +548,8 @@ ${ctx}`;
           <input type="text" value={nfName} onChange={e=>setNfName(e.target.value)} placeholder="Name" style={{...INP,flex:1}}/>
         </div>
         <input type="number" value={nfCost} onChange={e=>setNfCost(e.target.value)} placeholder="Cost per use ($)" style={INP}/>
-        <input type="number" value={nfTimes} onChange={e=>setNfTimes(e.target.value)} placeholder={nfType==="limited"?"Times per year":"1"} style={INP}/>
-        {nfCost&&nfTimes&&<div style={{background:"#F0EFFF",borderRadius:11,padding:"8px 13px",marginBottom:9,fontSize:12,fontWeight:700,color:"#6C63FF"}}>Monthly set-aside: <span style={{fontWeight:900}}>${(parseFloat(nfCost||0)*parseFloat(nfTimes||0)/12).toFixed(2)}/mo</span></div>}
+        <input type="number" value={nfTimes} onChange={e=>setNfTimes(e.target.value)} placeholder={nfType==="monthly"?"1 (monthly)":"Times per year"} style={INP}/>
+        {nfCost&&nfTimes&&<div style={{background:"#F0EFFF",borderRadius:11,padding:"8px 13px",marginBottom:8,fontSize:12,fontWeight:700,color:"#6C63FF"}}>Sets aside <span style={{fontWeight:900}}>${(parseFloat(nfCost||0)*parseFloat(nfTimes||0)/12).toFixed(2)}/mo</span></div>}
         <input type="text" value={nfNote} onChange={e=>setNfNote(e.target.value)} placeholder="Note (optional)" style={INP}/>
         <button onClick={addFutureItem} className="bp" style={BTN("linear-gradient(135deg,#6C63FF,#4a41dd)")}>Add ✨</button>
         <button onClick={()=>{setAddFutureModal(false);setFutureModal(true);}} className="bp" style={BTN("#f5f5f5","#999",0)}>← Back</button>
@@ -598,12 +567,11 @@ ${ctx}`;
 
       {/* ════ MAIN APP ════ */}
       <div style={{maxWidth:430,margin:"0 auto",minHeight:"100vh",background:"#F7F5FF",display:"flex",flexDirection:"column"}}>
-
         {/* Header */}
         <div style={{background:"linear-gradient(135deg,#667eea,#764ba2)",padding:"18px 16px 22px",color:"#fff"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:9}}>
             <div style={{fontSize:12,fontWeight:700,opacity:.8,letterSpacing:1,textTransform:"uppercase"}}>Jai's Money Tracker 💰</div>
-            <button onClick={()=>{ startReport(); }} className="bp" style={{background:"rgba(255,255,255,.18)",border:"1px solid rgba(255,255,255,.3)",borderRadius:999,padding:"6px 13px",color:"#fff",fontWeight:800,fontSize:12,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:5,width:"auto",marginBottom:0,backdropFilter:"blur(4px)"}}>
+            <button onClick={()=>startReport()} className="bp" style={{background:"rgba(255,255,255,.18)",border:"1px solid rgba(255,255,255,.3)",borderRadius:999,padding:"6px 13px",color:"#fff",fontWeight:800,fontSize:12,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:5,width:"auto",marginBottom:0}}>
               📊 Run Report
             </button>
           </div>
@@ -644,7 +612,7 @@ ${ctx}`;
               <div>
                 <div style={{fontWeight:900,fontSize:15,color:"#fff"}}>🎯 Future Expenses</div>
                 <div style={{fontWeight:700,fontSize:11,color:"rgba(255,255,255,.75)",marginTop:2}}>
-                  {(()=>{const items=data.futureItems||[];const used=items.reduce((s,f)=>s+(f.uses||[]).length,0);const left=items.reduce((s,f)=>f.type==="recurring"?s:s+Math.max(0,f.timesPerYear-(f.uses||[]).length),0);return `${used} used · ${left} uses left this year`;})()}
+                  {(()=>{const items=data.futureItems||[];const used=items.reduce((s,f)=>s+(f.uses||[]).length,0);const left=items.reduce((s,f)=>f.type==="monthly"?s:s+Math.max(0,f.timesPerYear-(f.uses||[]).length),0);return `${used} logged · ${left} uses left this year`;})()}
                 </div>
               </div>
               <div style={{textAlign:"right"}}>
@@ -662,9 +630,7 @@ ${ctx}`;
                 {remaining>0?`🔒 Close ${MONTHS[selMonth]} & save $${remaining.toFixed(2)} →`:`🔒 Close ${MONTHS[selMonth]} (no leftover)`}
               </button>
               :<div style={{marginBottom:10,display:"flex",gap:7,alignItems:"center"}}>
-                <div style={{flex:1,background:"#E6FFF9",borderRadius:12,padding:"9px 12px",display:"flex",alignItems:"center",gap:5}}>
-                  <span style={{fontSize:14}}>✅</span><span style={{fontWeight:800,fontSize:12,color:"#00A085"}}>{MONTHS[selMonth]} closed!</span>
-                </div>
+                <div style={{flex:1,background:"#E6FFF9",borderRadius:12,padding:"9px 12px",display:"flex",alignItems:"center",gap:5}}><span style={{fontSize:14}}>✅</span><span style={{fontWeight:800,fontSize:12,color:"#00A085"}}>{MONTHS[selMonth]} closed!</span></div>
                 <button onClick={()=>reopenMonth(selMonth,currentYear)} className="bp" style={{padding:"9px 12px",background:"#F0EFFF",color:"#6C63FF",border:"none",borderRadius:12,fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>🔓 Reopen</button>
               </div>
             }
@@ -719,33 +685,147 @@ ${ctx}`;
             <button onClick={addEarning} disabled={!earnAmt||parseFloat(earnAmt)<=0} className="bp" style={{...BTN("linear-gradient(135deg,#FFD93D,#FF9F43)","#5a3e00"),opacity:(!earnAmt||parseFloat(earnAmt)<=0)?.5:1}}>Add Earnings 🌟</button>
           </div>}
 
+          {/* ══ HISTORY VIEW ══ */}
           {view==="history"&&<div className="card">
             <button onClick={()=>setView("home")} style={{background:"none",border:"none",fontWeight:800,fontSize:13,color:"#764ba2",cursor:"pointer",marginBottom:10,padding:0,fontFamily:"inherit"}}>← Back</button>
-            <div style={{fontWeight:900,fontSize:20,color:"#333",marginBottom:3}}>History 📋</div>
-            <div style={{fontWeight:600,fontSize:11,color:"#aaa",marginBottom:12}}>Tap any spend to edit or delete</div>
-            {data.savingsLog.length>0&&<>
-              <div style={{fontWeight:800,fontSize:12,color:"#FF9F43",marginBottom:6}}>🐷 Savings Log</div>
-              <div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:14}}>
-                {data.savingsLog.slice(0,7).map(s=>{const d=new Date(s.date);return(
-                  <div key={s.id} style={{background:"#FFFBE6",borderRadius:12,padding:"9px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 6px rgba(0,0,0,.04)",borderLeft:"4px solid #FFD93D"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:15}}>{s.type==="withdraw"?"💸":"🐷"}</span><div><div style={{fontWeight:800,fontSize:12,color:"#333"}}>{s.note}</div><div style={{fontWeight:600,fontSize:10,color:"#aaa"}}>{MONTHS[d.getMonth()]} {d.getDate()}</div></div></div>
-                    <div style={{fontWeight:900,fontSize:13,color:s.type==="withdraw"?"#FF6B6B":"#FF9F43"}}>{s.type==="withdraw"?"-":"+"}${s.amount.toFixed(2)}</div>
-                  </div>
-                );})}
+            <div style={{fontWeight:900,fontSize:20,color:"#333",marginBottom:12}}>History 📋</div>
+
+            {/* Tab switcher */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:16,background:"#f0f0f0",borderRadius:12,padding:4}}>
+              {[{id:"monthly",label:"This Month"},{id:"allmonths",label:"Month View"},{id:"yearly",label:"Full Year"}].map(t=>(
+                <button key={t.id} onClick={()=>setHistoryTab(t.id)} className="bp" style={{padding:"9px 4px",background:historyTab===t.id?"#fff":"transparent",color:historyTab===t.id?"#333":"#999",border:"none",borderRadius:9,fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"inherit",marginBottom:0,boxShadow:historyTab===t.id?"0 2px 6px rgba(0,0,0,.1)":"none",transition:"all .15s"}}>{t.label}</button>
+              ))}
+            </div>
+
+            {/* THIS MONTH — transaction list */}
+            {historyTab==="monthly"&&<>
+              <div style={{fontWeight:700,fontSize:12,color:"#aaa",marginBottom:10}}>{MONTHS[selMonth]} transactions · tap to edit</div>
+              {allHistory.filter(i=>{const d=new Date(i.date);return d.getMonth()===selMonth&&d.getFullYear()===currentYear;}).length===0
+                ?<div style={{textAlign:"center",padding:"28px 20px",color:"#aaa"}}><div style={{fontSize:40,marginBottom:8}}>📭</div><div style={{fontWeight:800,fontSize:14}}>No transactions in {MONTHS[selMonth]}</div></div>
+                :<div style={{display:"flex",flexDirection:"column",gap:5}}>
+                  {allHistory.filter(i=>{const d=new Date(i.date);return d.getMonth()===selMonth&&d.getFullYear()===currentYear;}).map(item=>{
+                    const cat=CATEGORIES.find(c=>c.id===item.catId);const d=new Date(item.date);
+                    return(
+                      <div key={item.id} onClick={()=>item.kind==="spend"&&setEditTxn({...item})} style={{background:"#fff",borderRadius:12,padding:"10px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 7px rgba(0,0,0,.05)",borderLeft:`4px solid ${item.kind==="earn"?"#FFD93D":(cat?.color||"#ccc")}`,cursor:item.kind==="spend"?"pointer":"default"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:7}}><span style={{fontSize:18}}>{item.kind==="earn"?"⭐":(cat?.emoji||"💸")}</span><div><div style={{fontWeight:800,fontSize:12,color:"#333"}}>{item.note}</div><div style={{fontWeight:600,fontSize:10,color:"#bbb"}}>{MONTHS[d.getMonth()]} {d.getDate()}{item.kind==="spend"?" · tap to edit":""}</div></div></div>
+                        <div style={{fontWeight:900,fontSize:13,color:item.kind==="earn"?"#FF9F43":"#FF6B6B"}}>{item.kind==="earn"?"+":"-"}${item.amount.toFixed(2)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              }
+            </>}
+
+            {/* MONTH OVER MONTH view */}
+            {historyTab==="allmonths"&&<>
+              <div style={{fontWeight:700,fontSize:12,color:"#aaa",marginBottom:10}}>Every month since June</div>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {avail.slice().reverse().map(({m,y})=>{
+                  const ms=monthStats(m,y);
+                  const pct=ms.budget>0?Math.min(100,Math.round(ms.spent/ms.budget*100)):0;
+                  const over=ms.spent>ms.budget;
+                  const closed=data.closedMonths.includes(monthKey(m,y));
+                  return(
+                    <div key={`${y}-${m}`} style={{background:"#fff",borderRadius:14,padding:"13px 14px",boxShadow:"0 2px 9px rgba(0,0,0,.06)"}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <div style={{fontWeight:900,fontSize:15,color:"#333"}}>{MONTHS[m]} {y}</div>
+                          {closed&&<span style={{fontSize:10,fontWeight:800,color:"#00A085",background:"#E6FFF9",borderRadius:999,padding:"2px 7px"}}>✅ closed</span>}
+                        </div>
+                        <div style={{textAlign:"right"}}>
+                          <span style={{fontWeight:900,fontSize:14,color:over?"#FF6B6B":"#333"}}>${ms.spent.toFixed(0)}</span>
+                          <span style={{fontWeight:600,fontSize:11,color:"#aaa"}}> / ${ms.budget.toFixed(0)}</span>
+                        </div>
+                      </div>
+                      <div style={{background:"#f0f0f0",borderRadius:999,height:7,marginBottom:8}}>
+                        <div style={{width:`${pct}%`,background:over?"#FF6B6B":"#6C63FF",height:7,borderRadius:999}}/>
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
+                        {CATEGORIES.map(cat=>{
+                          const txns=data.transactions.filter(t=>{const d=new Date(t.date);return d.getMonth()===m&&d.getFullYear()===y;});
+                          const s=spentInCat(cat.id,txns);
+                          return s>0?(
+                            <div key={cat.id} style={{background:cat.bg,borderRadius:8,padding:"5px 8px",display:"flex",alignItems:"center",gap:4}}>
+                              <span style={{fontSize:13}}>{cat.emoji}</span>
+                              <span style={{fontWeight:800,fontSize:11,color:cat.color}}>${s.toFixed(0)}</span>
+                            </div>
+                          ):null;
+                        }).filter(Boolean)}
+                        {ms.saved>0&&<div style={{background:"#FFFBE6",borderRadius:8,padding:"5px 8px",display:"flex",alignItems:"center",gap:4}}>
+                          <span style={{fontSize:13}}>🐷</span>
+                          <span style={{fontWeight:800,fontSize:11,color:"#FF9F43"}}>${ms.saved.toFixed(0)}</span>
+                        </div>}
+                      </div>
+                      {ms.txnCount===0&&<div style={{fontSize:11,color:"#ccc",fontWeight:700,marginTop:4}}>No transactions logged</div>}
+                    </div>
+                  );
+                })}
               </div>
             </>}
-            <div style={{fontWeight:800,fontSize:12,color:"#6C63FF",marginBottom:6}}>💸 Spending & Earnings</div>
-            {allHistory.length===0
-              ?<div style={{textAlign:"center",padding:"28px 20px",color:"#aaa"}}><div style={{fontSize:44,marginBottom:9}}>📭</div><div style={{fontWeight:800,fontSize:14}}>Nothing yet!</div></div>
-              :<div style={{display:"flex",flexDirection:"column",gap:5}}>
-                {allHistory.map(item=>{const cat=CATEGORIES.find(c=>c.id===item.catId);const d=new Date(item.date);return(
-                  <div key={item.id} onClick={()=>item.kind==="spend"&&setEditTxn({...item})} style={{background:"#fff",borderRadius:12,padding:"10px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 7px rgba(0,0,0,.05)",borderLeft:`4px solid ${item.kind==="earn"?"#FFD93D":(cat?.color||"#ccc")}`,cursor:item.kind==="spend"?"pointer":"default"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:7}}><span style={{fontSize:18}}>{item.kind==="earn"?"⭐":(cat?.emoji||"💸")}</span><div><div style={{fontWeight:800,fontSize:12,color:"#333"}}>{item.note}</div><div style={{fontWeight:600,fontSize:10,color:"#bbb"}}>{MONTHS[d.getMonth()]} {d.getDate()}{item.kind==="spend"?" · tap to edit":""}</div></div></div>
-                    <div style={{fontWeight:900,fontSize:13,color:item.kind==="earn"?"#FF9F43":"#FF6B6B"}}>{item.kind==="earn"?"+":"-"}${item.amount.toFixed(2)}</div>
+
+            {/* YEARLY SUMMARY */}
+            {historyTab==="yearly"&&<>
+              <div style={{fontWeight:700,fontSize:12,color:"#aaa",marginBottom:10}}>June – December {currentYear}</div>
+
+              {/* Year totals */}
+              {(()=>{
+                const allTxns=data.transactions.filter(t=>!t.isRollover);
+                const allEarns=data.earnings;
+                const totalYearSpent=allTxns.reduce((s,t)=>s+t.amount,0);
+                const totalYearEarned=(avail.length*effectiveBudget)+allEarns.reduce((s,e)=>s+e.amount,0);
+                const totalYearSaved=data.savingsLog.filter(s=>s.type!=="withdraw").reduce((s,e)=>s+e.amount,0)
+                  -data.savingsLog.filter(s=>s.type==="withdraw").reduce((s,e)=>s+e.amount,0);
+                return(
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:16}}>
+                    {[{label:"Total Earned",val:totalYearEarned,color:"#6C63FF",emoji:"⭐"},
+                      {label:"Total Spent",val:totalYearSpent,color:"#FF6B6B",emoji:"💸"},
+                      {label:"Net Saved",val:data.savingsJar,color:"#FF9F43",emoji:"🐷"}].map(s=>(
+                      <div key={s.label} style={{background:"#fff",borderRadius:14,padding:"12px 10px",textAlign:"center",boxShadow:"0 2px 9px rgba(0,0,0,.06)"}}>
+                        <div style={{fontSize:20,marginBottom:3}}>{s.emoji}</div>
+                        <div style={{fontWeight:900,fontSize:16,color:s.color}}>${s.val.toFixed(0)}</div>
+                        <div style={{fontWeight:700,fontSize:10,color:"#aaa"}}>{s.label}</div>
+                      </div>
+                    ))}
                   </div>
-                );})}
+                );
+              })()}
+
+              {/* Category year totals */}
+              <div style={{fontWeight:800,fontSize:13,color:"#333",marginBottom:8}}>By Category</div>
+              <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:16}}>
+                {CATEGORIES.map(cat=>{
+                  const yearSpent=data.transactions.filter(t=>!t.isRollover&&t.catId===cat.id).reduce((s,t)=>s+t.amount,0);
+                  const yearBudget=cat.budget*avail.length;
+                  const pct=yearBudget>0?Math.min(100,Math.round(yearSpent/yearBudget*100)):0;
+                  const over=yearSpent>yearBudget;
+                  return(
+                    <div key={cat.id} style={{background:"#fff",borderRadius:13,padding:"11px 13px",boxShadow:"0 2px 7px rgba(0,0,0,.05)",borderLeft:`4px solid ${cat.color}`}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:17}}>{cat.emoji}</span><span style={{fontWeight:800,fontSize:13,color:"#333"}}>{cat.name}</span></div>
+                        <div><span style={{fontWeight:900,fontSize:13,color:over?"#FF6B6B":"#333"}}>${yearSpent.toFixed(0)}</span><span style={{fontWeight:600,fontSize:11,color:"#aaa"}}> / ${yearBudget.toFixed(0)}</span></div>
+                      </div>
+                      <div style={{background:"#f0f0f0",borderRadius:999,height:6}}><div style={{width:`${pct}%`,background:over?"#FF6B6B":cat.color,height:6,borderRadius:999}}/></div>
+                    </div>
+                  );
+                })}
               </div>
-            }
+
+              {/* Future items year summary */}
+              <div style={{fontWeight:800,fontSize:13,color:"#333",marginBottom:8}}>Future Expenses Used</div>
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {(data.futureItems||[]).map(item=>{
+                  const totalUsed=(item.uses||[]).reduce((s,u)=>s+u.amount,0);
+                  const useCount=(item.uses||[]).length;
+                  if(useCount===0) return null;
+                  return(
+                    <div key={item.id} style={{background:"#fff",borderRadius:12,padding:"10px 13px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 6px rgba(0,0,0,.04)"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:7}}><span style={{fontSize:18}}>{item.emoji}</span><div><div style={{fontWeight:800,fontSize:13,color:"#333"}}>{item.name}</div><div style={{fontWeight:600,fontSize:10,color:"#aaa"}}>{useCount}x used</div></div></div>
+                      <div style={{fontWeight:900,fontSize:14,color:"#6C63FF"}}>${totalUsed.toFixed(0)}</div>
+                    </div>
+                  );
+                }).filter(Boolean)}
+              </div>
+            </>}
           </div>}
         </div>
       </div>
