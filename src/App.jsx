@@ -180,10 +180,10 @@ ${futureBreakdown}`;
   async function callAI(messages, systemPrompt) {
     const storedKey = localStorage.getItem(API_KEY_STORAGE);
     const headers = { "Content-Type":"application/json" };
-    const body = { model:"claude-sonnet-4-20250514", max_tokens:1000, system:systemPrompt, messages, ...(storedKey ? {apiKey: storedKey} : {}) };
+    const body = { model:"claude-sonnet-4-6", max_tokens:1000, system:systemPrompt, messages, ...(storedKey ? {apiKey: storedKey} : {}) };
     const res = await fetch("/api/coach", { method:"POST", headers, body:JSON.stringify(body) });
     const d = await res.json();
-    if(d.error) throw new Error(d.error);
+    if(d.error) throw new Error(typeof d.error === "string" ? d.error : JSON.stringify(d.error));
     return d.content?.find(c=>c.type==="text")?.text || "Try again!";
   }
 
@@ -206,7 +206,7 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
     try {
       const text = await callAI([{role:"user",content:"Give me my monthly money report!"}], systemPrompt);
       setChatMsgs([{role:"assistant",text}]);
-    } catch { setChatMsgs([{role:"assistant",text:"Couldn't connect. Make sure you're online! 🔌"}]); }
+    } catch(err) { setChatMsgs([{role:"assistant",text:`Error: ${err.message} 🔌`}]); }
     setChatLoading(false);
   }
 
@@ -219,7 +219,7 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
       const apiMsgs=newMsgs.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.text}));
       const text=await callAI(apiMsgs, systemPrompt);
       setChatMsgs(prev=>[...prev,{role:"assistant",text}]);
-    } catch { setChatMsgs(prev=>[...prev,{role:"assistant",text:"Connection issue! 🔌"}]); }
+    } catch(err) { setChatMsgs(prev=>[...prev,{role:"assistant",text:`Error: ${err.message} 🔌`}]); }
     setChatLoading(false);
   }
 
