@@ -9,7 +9,7 @@ const CATEGORIES = [
   { id:"food",    name:"Food & Drinks", emoji:"🧋", color:"#FF6B6B", bg:"#FFF0F0", budget:238.17 },
   { id:"fun",     name:"Fun & Games",   emoji:"🎮", color:"#6C63FF", bg:"#F0EFFF", budget:67.5   },
   { id:"gifts",   name:"Gifts",         emoji:"🎁", color:"#FF9F43", bg:"#FFF5E6", budget:45.0   },
-  { id:"charity", name:"Giving Back",   emoji:"❤️", color:"#EE5A87", bg:"#FFF0F5", budget:6.67   },
+  { id:"charity", name:"Giving Back",   emoji:"❤️", color:"#EE5A87", bg:"#FFF0F5", budget:7.00   },
 ];
 
 // type: "monthly" = happens every month (video games, roblox, etc.)
@@ -475,7 +475,7 @@ Opening report: 100 words MAX. Punchy — one big win, one thing to watch, one q
       {/* Future Panel */}
       {futureModal&&<div style={OL}><div style={{...MB,maxWidth:420}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-          <div style={{fontWeight:900,fontSize:18,color:"#333"}}>🎯 Future Expenses</div>
+          <div style={{fontWeight:900,fontSize:18,color:"#333"}}>🎯 Future Purchases</div>
           <button onClick={()=>setFutureModal(false)} className="bp" style={{background:"#f0f0f0",border:"none",borderRadius:999,width:28,height:28,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",padding:0,marginBottom:0}}>×</button>
         </div>
 
@@ -687,7 +687,7 @@ Opening report: 100 words MAX. Punchy — one big win, one thing to watch, one q
           {view==="home"&&<>
             {/* Action buttons — 2 col (categories are now tappable for Track Spend) */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-              {[{label:"Add Earnings",emoji:"⭐",v:"earn",color:"#FF9F43"},{label:"History",emoji:"📋",v:"history",color:"#6C63FF"}].map(b=>(
+              {[{label:"Add Money",emoji:"⭐",v:"earn",color:"#FF9F43"},{label:"History",emoji:"📋",v:"history",color:"#6C63FF"}].map(b=>(
                 <button key={b.v} onClick={()=>setView(b.v)} className="bp" style={{background:b.color,color:"#fff",border:"none",borderRadius:16,padding:"13px 5px",cursor:"pointer",fontFamily:"inherit",fontWeight:800,fontSize:13,display:"flex",flexDirection:"column",alignItems:"center",gap:3,boxShadow:`0 4px 14px ${b.color}55`}}>
                   <span style={{fontSize:22}}>{b.emoji}</span>{b.label}
                 </button>
@@ -697,7 +697,7 @@ Opening report: 100 words MAX. Punchy — one big win, one thing to watch, one q
             {/* Future card */}
             <div onClick={()=>setFutureModal(true)} style={{background:"linear-gradient(135deg,#6C63FF,#4a41dd)",borderRadius:18,padding:"14px 17px",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 6px 20px #6C63FF44",cursor:"pointer"}}>
               <div>
-                <div style={{fontWeight:900,fontSize:15,color:"#fff"}}>🎯 Future Expenses</div>
+                <div style={{fontWeight:900,fontSize:15,color:"#fff"}}>🎯 Future Purchases</div>
                 <div style={{fontWeight:700,fontSize:11,color:"rgba(255,255,255,.75)",marginTop:2}}>
                   {(()=>{const items=data.futureItems||[];const used=items.reduce((s,f)=>s+(f.uses||[]).length,0);const left=items.reduce((s,f)=>f.type==="monthly"?s:s+Math.max(0,f.timesPerYear-(f.uses||[]).length),0);return `${used} logged · ${left} uses left this year`;})()}
                 </div>
@@ -785,7 +785,8 @@ Opening report: 100 words MAX. Punchy — one big win, one thing to watch, one q
                       </div>
                     </div>
                     <div style={{background:"#f0f0f0",borderRadius:999,height:6}}><div style={{width:`${pct}%`,background:over?"#FF6B6B":cat.color,height:6,borderRadius:999,transition:"width .4s"}}/></div>
-                    {over&&<div style={{fontSize:10,color:"#FF6B6B",fontWeight:700,marginTop:2}}>⚠️ Over by ${(spent-cat.budget).toFixed(2)}!</div>}
+                    {over&&cat.id!=="charity"&&<div style={{fontSize:10,color:"#FF6B6B",fontWeight:700,marginTop:2}}>⚠️ Over by ${(spent-cat.budget).toFixed(2)}!</div>}
+                    {over&&cat.id==="charity"&&<div style={{fontSize:10,color:"#EE5A87",fontWeight:700,marginTop:2}}>❤️ Extra generous!</div>}
                   </div>
                 );
               })}
@@ -939,7 +940,7 @@ Opening report: 100 words MAX. Punchy — one big win, one thing to watch, one q
                   );
                 })}
               </div>
-              <div style={{fontWeight:800,fontSize:13,color:"#333",marginBottom:8}}>Future Expenses Used</div>
+              <div style={{fontWeight:800,fontSize:13,color:"#333",marginBottom:8}}>Future Purchases Used</div>
               <div style={{display:"flex",flexDirection:"column",gap:6}}>
                 {(data.futureItems||[]).map(item=>{
                   const totalUsed=(item.uses||[]).reduce((s,u)=>s+u.amount,0);
