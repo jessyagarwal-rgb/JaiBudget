@@ -28,6 +28,7 @@ const DEFAULT_FUTURE = [
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const STORAGE_KEY = "jai_budget_v7";
 const API_KEY_STORAGE = "jai_coach_api_key";
+const STOCK_KEY = "jai_stocks_v1";
 
 
 function loadData() {
@@ -89,8 +90,14 @@ export default function App() {
   const [chatLoading,setChatLoading] = useState(false);
   const [apiKeyModal,setApiKeyModal] = useState(false);
   const [apiKeyInput,setApiKeyInput] = useState(()=>localStorage.getItem(API_KEY_STORAGE)||"");
-  // History view mode
-  const [historyTab,setHistoryTab]   = useState("monthly"); // "monthly" | "yearly"
+  const [historyTab,setHistoryTab]   = useState("monthly");
+  // Stock watchlist state
+  const [stocks,setStocks]           = useState(()=>{ try{const s=localStorage.getItem(STOCK_KEY);return s?JSON.parse(s):[];}catch{return[];} });
+  const [stocksLoading,setStocksLoading] = useState(false);
+  const [stockModal,setStockModal]   = useState(false);
+  const [newStockSymbol,setNewStockSymbol] = useState("");
+  const [newStockShares,setNewStockShares] = useState("");
+  const [newStockPrice,setNewStockPrice]   = useState("");
   const chatEndRef = useRef(null);
 
   const now=new Date(); const currentYear=START_YEAR;
@@ -121,6 +128,9 @@ export default function App() {
 
   useEffect(()=>{ if(chatEndRef.current) chatEndRef.current.scrollIntoView({behavior:"smooth"}); },[chatMsgs]);
 
+  // Fetch stock prices on mount if we have stocks
+  useEffect(()=>{ if(stocks.length>0) fetchStockPrices(stocks); },[]);
+
   function showToast(msg,color="#00C9A7") { setToast({msg,color}); setTimeout(()=>setToast(null),2800); }
 
   const futureMonthlyTotal=(data.futureItems||[]).reduce((s,f)=>s+(f.monthly||0),0);
@@ -145,7 +155,6 @@ export default function App() {
     return {pool,totalUsed,useCount,annualAllowed,usesLeft,balance};
   }
 
-  // ── Monthly history stats helper ──
   function monthStats(m, y) {
     const txns = data.transactions.filter(t=>{const d=new Date(t.date);return d.getMonth()===m&&d.getFullYear()===y&&!t.isRollover;});
     const earns = data.earnings.filter(e=>{const d=new Date(e.date);return d.getMonth()===m&&d.getFullYear()===y;});
@@ -198,11 +207,11 @@ ${futureBreakdown}`;
     setReportView(true);
     if(chatMsgs.length>0) return;
     setChatLoading(true);
-    const systemPrompt = `You are "Coach Jai" — a fun, hype money coach for a kid named Jai (12-14 yrs). You sound like a podcast host meets finance influencer — energetic, encouraging, casual, uses emojis naturally. Give REAL advice based on actual numbers.
+    const systemPrompt = `You are "Coach Jai" — a hype money coach for Jai (12-14 yrs). Podcast energy, casual, uses emojis. Give REAL advice from actual numbers.
 
 ${buildFinancialContext()}
 
-Opening report style: punchy podcast intro → celebrate wins → flag concerns kindly → 2-3 actionable tips → motivating closer about Disney or savings goal. ~250-300 words, short paragraphs.`;
+Opening report: 100 words MAX. Punchy — one big win, one thing to watch, one quick tip. End with a Disney hype line if savings are on track. Short paragraphs only.`;
     try {
       const text = await callAI([{role:"user",content:"Give me my monthly money report!"}], systemPrompt);
       setChatMsgs([{role:"assistant",text}]);
@@ -214,13 +223,58 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
     const msg=chatInput.trim(); if(!msg||chatLoading) return;
     const newMsgs=[...chatMsgs,{role:"user",text:msg}];
     setChatMsgs(newMsgs); setChatInput(""); setChatLoading(true);
-    const systemPrompt = `You are "Coach Jai" — fun, energetic money coach for Jai (12-14 yrs). Short punchy answers under 120 words. Always tie to real numbers.\n\n${buildFinancialContext()}`;
+    const systemPrompt = `You are "Coach Jai" — hype money coach for Jai (12-14 yrs). Max 60 words. One key insight, real numbers only, no filler.\n\n${buildFinancialContext()}`;
     try {
       const apiMsgs=newMsgs.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.text}));
       const text=await callAI(apiMsgs, systemPrompt);
       setChatMsgs(prev=>[...prev,{role:"assistant",text}]);
     } catch(err) { setChatMsgs(prev=>[...prev,{role:"assistant",text:`Error: ${err.message} 🔌`}]); }
     setChatLoading(false);
+  }
+
+  // ── Stock functions ──
+  async function fetchStockPrices(currentStocks) {
+    const list = currentStocks || stocks;
+    if(!list.length || stocksLoading) return;
+    setStocksLoading(true);
+    const updated = await Promise.all(list.map(async s => {
+      try {
+        const r = await fetch(`/api/stocks?symbol=${encodeURIComponent(s.symbol)}`);
+        const d = await r.json();
+        return { ...s, currentPrice: d.price ?? s.currentPrice, name: d.name || s.name };
+      } catch { return s; }
+    }));
+    setStocks(updated);
+    try { localStorage.setItem(STOCK_KEY, JSON.stringify(updated)); } catch {}
+    setStocksLoading(false);
+    showToast("📈 Prices updated!","#667eea");
+  }
+
+  async function addStock() {
+    if(!newStockSymbol.trim()||!newStockShares||!newStockPrice) return;
+    const newS = {
+      id: Date.now(),
+      symbol: newStockSymbol.toUpperCase().trim(),
+      shares: parseFloat(newStockShares),
+      purchasePrice: parseFloat(newStockPrice),
+      currentPrice: null,
+      name: newStockSymbol.toUpperCase().trim()
+    };
+    const updated = [...stocks, newS];
+    setStocks(updated);
+    try { localStorage.setItem(STOCK_KEY, JSON.stringify(updated)); } catch {}
+    setNewStockSymbol(""); setNewStockShares(""); setNewStockPrice("");
+    setStockModal(false);
+    showToast("📈 Stock added!","#667eea");
+    // Fetch live price for the new stock
+    fetchStockPrices(updated);
+  }
+
+  function removeStock(id) {
+    const updated = stocks.filter(s => s.id !== id);
+    setStocks(updated);
+    try { localStorage.setItem(STOCK_KEY, JSON.stringify(updated)); } catch {}
+    showToast("Removed","#aaa");
   }
 
   // ── Actions ──
@@ -313,6 +367,7 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
         .card{animation:pop .2s ease}.bp:active{transform:scale(.95)}
         ::-webkit-scrollbar{width:0} input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
         .typing span{display:inline-block;animation:pulse 1.2s infinite}.typing span:nth-child(2){animation-delay:.2s}.typing span:nth-child(3){animation-delay:.4s}
+        .cat-card:active{transform:scale(.97)}
       `}</style>
 
       {toast&&<div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",background:toast.color,color:"#fff",borderRadius:999,padding:"11px 26px",fontWeight:800,fontSize:15,zIndex:1002,boxShadow:"0 8px 30px rgba(0,0,0,.2)",animation:"slideDown .3s ease",whiteSpace:"nowrap"}}>{toast.msg}</div>}
@@ -369,7 +424,7 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
             <button onClick={sendChatMsg} disabled={!chatInput.trim()||chatLoading} className="bp" style={{background:chatInput.trim()&&!chatLoading?"linear-gradient(135deg,#667eea,#764ba2)":"rgba(255,255,255,.1)",color:"#fff",border:"none",borderRadius:999,padding:"0 18px",fontSize:18,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0,opacity:chatInput.trim()&&!chatLoading?1:.5}}>→</button>
           </div>
 
-          {/* API Key Modal — inside coach overlay so it renders above zIndex:1000 */}
+          {/* API Key Modal */}
           {apiKeyModal&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.7)",zIndex:10,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
             <div style={{background:"#fff",borderRadius:26,padding:"22px 18px",maxWidth:360,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,.4)"}}>
               <div style={{fontWeight:900,fontSize:18,color:"#333",marginBottom:6}}>🔑 $ Coach API Key</div>
@@ -406,14 +461,24 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
         <button onClick={()=>setJarModal(false)} className="bp" style={BTN("#f5f5f5","#999",0)}>Cancel</button>
       </div></div>}
 
-      {/* ── Future Panel (simplified) ── */}
+      {/* Stock Modal */}
+      {stockModal&&<div style={OL}><div style={MB}>
+        <div style={{fontWeight:900,fontSize:18,color:"#333",marginBottom:5}}>📈 Add a Stock</div>
+        <div style={{fontWeight:600,fontSize:12,color:"#888",marginBottom:14}}>Track what you own vs. what you paid</div>
+        <input type="text" value={newStockSymbol} onChange={e=>setNewStockSymbol(e.target.value.toUpperCase())} placeholder="Ticker symbol (e.g. AAPL)" style={{...INP,textTransform:"uppercase",letterSpacing:1}}/>
+        <input type="number" value={newStockShares} onChange={e=>setNewStockShares(e.target.value)} placeholder="Shares owned" style={INP}/>
+        <input type="number" value={newStockPrice} onChange={e=>setNewStockPrice(e.target.value)} placeholder="Your purchase price ($)" style={INP}/>
+        <button onClick={addStock} disabled={!newStockSymbol.trim()||!newStockShares||!newStockPrice} className="bp" style={{...BTN("linear-gradient(135deg,#667eea,#764ba2)"),opacity:(!newStockSymbol.trim()||!newStockShares||!newStockPrice)?.5:1}}>Add Stock 📈</button>
+        <button onClick={()=>setStockModal(false)} className="bp" style={BTN("#f5f5f5","#999",0)}>Cancel</button>
+      </div></div>}
+
+      {/* Future Panel */}
       {futureModal&&<div style={OL}><div style={{...MB,maxWidth:420}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
           <div style={{fontWeight:900,fontSize:18,color:"#333"}}>🎯 Future Expenses</div>
           <button onClick={()=>setFutureModal(false)} className="bp" style={{background:"#f0f0f0",border:"none",borderRadius:999,width:28,height:28,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",padding:0,marginBottom:0}}>×</button>
         </div>
 
-        {/* Monthly subscriptions */}
         {monthlyItems.length>0&&<>
           <div style={{fontWeight:800,fontSize:12,color:"#aaa",letterSpacing:.5,textTransform:"uppercase",marginBottom:8}}>Every Month</div>
           <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
@@ -442,7 +507,6 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
           </div>
         </>}
 
-        {/* Limited / seasonal activities */}
         {limitedItems.length>0&&<>
           <div style={{fontWeight:800,fontSize:12,color:"#aaa",letterSpacing:.5,textTransform:"uppercase",marginBottom:8}}>Activities This Year</div>
           <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
@@ -470,14 +534,12 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
           </div>
         </>}
 
-        {/* Big Goals */}
         {bigGoalItems.length>0&&<>
           <div style={{fontWeight:800,fontSize:12,color:"#aaa",letterSpacing:.5,textTransform:"uppercase",marginBottom:8}}>Big Goals 🌟</div>
           <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
             {bigGoalItems.map(item=>{
               const s=itemStats(item);
               const allUsed=s.usesLeft===0;
-              // Progress toward goal
               const pct=Math.min(100,Math.round((s.pool/item.costPerUse)*100));
               return(
                 <div key={item.id} style={{background:"linear-gradient(135deg,#E6FFF9,#f0fff8)",borderRadius:14,padding:"14px 15px",boxShadow:"0 2px 8px rgba(0,0,0,.05)",border:"2px solid #00C9A733"}}>
@@ -494,7 +556,6 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
                       {!allUsed&&<button onClick={()=>{setUseModal(item);setUseAmt(String(item.costPerUse));setFutureModal(false);}} className="bp" style={{background:"linear-gradient(135deg,#00C9A7,#00A085)",color:"#fff",border:"none",borderRadius:9,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>Book it!</button>}
                     </div>
                   </div>
-                  {/* Savings progress */}
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
                     <span style={{fontWeight:700,fontSize:12,color:"#00A085"}}>${s.pool.toFixed(0)} saved of ${item.costPerUse.toLocaleString()}</span>
                     <span style={{fontWeight:800,fontSize:13,color:"#00A085"}}>{pct}%</span>
@@ -624,13 +685,15 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
         {/* Body */}
         <div style={{flex:1,padding:"12px",overflowY:"auto"}}>
           {view==="home"&&<>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12}}>
-              {[{label:"Track Spend",emoji:"💸",v:"spend",color:"#FF6B6B"},{label:"Add Earnings",emoji:"⭐",v:"earn",color:"#FF9F43"},{label:"History",emoji:"📋",v:"history",color:"#6C63FF"}].map(b=>(
-                <button key={b.v} onClick={()=>setView(b.v)} className="bp" style={{background:b.color,color:"#fff",border:"none",borderRadius:16,padding:"12px 5px",cursor:"pointer",fontFamily:"inherit",fontWeight:800,fontSize:12,display:"flex",flexDirection:"column",alignItems:"center",gap:3,boxShadow:`0 4px 14px ${b.color}55`}}>
-                  <span style={{fontSize:20}}>{b.emoji}</span>{b.label}
+            {/* Action buttons — 2 col (categories are now tappable for Track Spend) */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+              {[{label:"Add Earnings",emoji:"⭐",v:"earn",color:"#FF9F43"},{label:"History",emoji:"📋",v:"history",color:"#6C63FF"}].map(b=>(
+                <button key={b.v} onClick={()=>setView(b.v)} className="bp" style={{background:b.color,color:"#fff",border:"none",borderRadius:16,padding:"13px 5px",cursor:"pointer",fontFamily:"inherit",fontWeight:800,fontSize:13,display:"flex",flexDirection:"column",alignItems:"center",gap:3,boxShadow:`0 4px 14px ${b.color}55`}}>
+                  <span style={{fontSize:22}}>{b.emoji}</span>{b.label}
                 </button>
               ))}
             </div>
+
             {/* Future card */}
             <div onClick={()=>setFutureModal(true)} style={{background:"linear-gradient(135deg,#6C63FF,#4a41dd)",borderRadius:18,padding:"14px 17px",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 6px 20px #6C63FF44",cursor:"pointer"}}>
               <div>
@@ -644,11 +707,58 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
                 <div style={{fontWeight:700,fontSize:11,color:"rgba(255,255,255,.7)"}}>tap to manage ✏️</div>
               </div>
             </div>
+
             {/* Savings jar */}
             <div onClick={()=>setJarModal(true)} style={{background:"linear-gradient(135deg,#FFD93D,#FF9F43)",borderRadius:18,padding:"14px 17px",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 6px 20px #FFD93D44",cursor:"pointer"}}>
               <div><div style={{fontWeight:900,fontSize:15,color:"#5a3e00"}}>🐷 Savings Jar</div><div style={{fontWeight:700,fontSize:11,color:"#7a5500"}}>Tap to add or take out</div></div>
               <div style={{textAlign:"right"}}><div style={{fontWeight:900,fontSize:24,color:"#5a3e00"}}>${data.savingsJar.toFixed(2)}</div><div style={{fontWeight:700,fontSize:11,color:"#7a5500"}}>total saved ✏️</div></div>
             </div>
+
+            {/* ── Stock Watchlist ── */}
+            <div style={{background:"#fff",borderRadius:18,padding:"14px 16px",marginBottom:10,boxShadow:"0 4px 16px rgba(0,0,0,.07)"}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:stocks.length>0?10:0}}>
+                <div style={{fontWeight:900,fontSize:15,color:"#333"}}>📈 My Stocks</div>
+                <div style={{display:"flex",gap:6}}>
+                  {stocks.length>0&&<button onClick={()=>fetchStockPrices()} disabled={stocksLoading} className="bp" style={{background:"#F0EFFF",border:"none",borderRadius:9,padding:"5px 10px",fontSize:13,fontWeight:800,color:stocksLoading?"#bbb":"#6C63FF",cursor:stocksLoading?"default":"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>
+                    {stocksLoading?"⟳ …":"🔄"}
+                  </button>}
+                  <button onClick={()=>setStockModal(true)} className="bp" style={{background:"linear-gradient(135deg,#667eea,#764ba2)",color:"#fff",border:"none",borderRadius:9,padding:"5px 11px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>+ Add</button>
+                </div>
+              </div>
+              {stocks.length===0
+                ?<div style={{fontSize:12,color:"#bbb",fontWeight:700,paddingTop:4}}>No stocks yet — tap + Add to watch one</div>
+                :<div>
+                  {stocks.map((s,i)=>{
+                    const change=s.currentPrice!=null?((s.currentPrice-s.purchasePrice)/s.purchasePrice*100):null;
+                    const up=change!=null&&change>=0;
+                    const totalValue=s.currentPrice!=null?(s.currentPrice*s.shares):null;
+                    const costBasis=s.purchasePrice*s.shares;
+                    return(
+                      <div key={s.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 0",borderBottom:i<stocks.length-1?"1px solid #f5f5f5":"none"}}>
+                        <div style={{flex:1}}>
+                          <div style={{display:"flex",alignItems:"center",gap:6}}>
+                            <span style={{fontWeight:900,fontSize:14,color:"#333"}}>{s.symbol}</span>
+                            <span style={{fontWeight:600,fontSize:11,color:"#aaa"}}>{s.shares} shares</span>
+                          </div>
+                          <div style={{fontSize:11,color:"#bbb",fontWeight:600}}>Paid ${s.purchasePrice.toFixed(2)}/sh · ${costBasis.toFixed(0)} total</div>
+                        </div>
+                        <div style={{textAlign:"right",display:"flex",alignItems:"center",gap:10}}>
+                          <div>
+                            {s.currentPrice!=null
+                              ?<><div style={{fontWeight:900,fontSize:14,color:up?"#00A085":"#FF6B6B"}}>${s.currentPrice.toFixed(2)}</div>
+                                <div style={{fontSize:11,fontWeight:800,color:up?"#00A085":"#FF6B6B"}}>{up?"▲":"▼"} {Math.abs(change).toFixed(1)}%</div></>
+                              :<div style={{fontSize:12,color:"#ddd",fontWeight:700}}>—</div>
+                            }
+                          </div>
+                          <button onClick={()=>removeStock(s.id)} className="bp" style={{background:"#f5f5f5",border:"none",borderRadius:8,padding:"4px 8px",fontSize:12,color:"#ccc",cursor:"pointer",fontFamily:"inherit",width:"auto",marginBottom:0}}>✕</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              }
+            </div>
+
             {!isClosed
               ?<button onClick={()=>remaining>0?closeMonth(selMonth,currentYear,remaining):closeNoLeftover(selMonth,currentYear)} className="bp" style={{width:"100%",padding:"11px",background:remaining>0?"linear-gradient(135deg,#00C9A7,#00A085)":"#eee",color:remaining>0?"#fff":"#aaa",border:"none",borderRadius:13,fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",marginBottom:10,boxShadow:remaining>0?"0 4px 14px #00C9A755":"none"}}>
                 {remaining>0?`🔒 Close ${MONTHS[selMonth]} & save $${remaining.toFixed(2)} →`:`🔒 Close ${MONTHS[selMonth]} (no leftover)`}
@@ -658,15 +768,21 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
                 <button onClick={()=>reopenMonth(selMonth,currentYear)} className="bp" style={{padding:"9px 12px",background:"#F0EFFF",color:"#6C63FF",border:"none",borderRadius:12,fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>🔓 Reopen</button>
               </div>
             }
-            <div style={{fontWeight:900,fontSize:14,color:"#333",marginBottom:8}}>This Month's Buckets</div>
+
+            {/* Spending Buckets — tap to log */}
+            <div style={{fontWeight:900,fontSize:14,color:"#333",marginBottom:4}}>Spending Buckets</div>
+            <div style={{fontWeight:600,fontSize:11,color:"#aaa",marginBottom:9}}>Tap a bucket to log a spend</div>
             <div style={{display:"flex",flexDirection:"column",gap:7}}>
               {CATEGORIES.map(cat=>{
                 const spent=spentInCat(cat.id),pct=Math.min(100,(spent/cat.budget)*100),over=spent>cat.budget;
                 return(
-                  <div key={cat.id} className="card" style={{background:"#fff",borderRadius:16,padding:"11px 13px",boxShadow:"0 2px 9px rgba(0,0,0,.06)",borderLeft:`5px solid ${cat.color}`}}>
+                  <div key={cat.id} className="cat-card card" onClick={()=>{setSelectedCat(cat.id);setView("spend");}} style={{background:"#fff",borderRadius:16,padding:"11px 13px",boxShadow:"0 2px 9px rgba(0,0,0,.06)",borderLeft:`5px solid ${cat.color}`,cursor:"pointer",transition:"transform .12s"}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
                       <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:18}}>{cat.emoji}</span><span style={{fontWeight:800,fontSize:13,color:"#333"}}>{cat.name}</span></div>
-                      <div><span style={{fontWeight:900,fontSize:13,color:over?"#FF6B6B":"#333"}}>${spent.toFixed(2)}</span><span style={{fontWeight:600,fontSize:11,color:"#aaa"}}> /${cat.budget.toFixed(0)}</span></div>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <div><span style={{fontWeight:900,fontSize:13,color:over?"#FF6B6B":"#333"}}>${spent.toFixed(2)}</span><span style={{fontWeight:600,fontSize:11,color:"#aaa"}}> /${cat.budget.toFixed(0)}</span></div>
+                        <span style={{fontSize:14,color:cat.color,fontWeight:900}}>+</span>
+                      </div>
                     </div>
                     <div style={{background:"#f0f0f0",borderRadius:999,height:6}}><div style={{width:`${pct}%`,background:over?"#FF6B6B":cat.color,height:6,borderRadius:999,transition:"width .4s"}}/></div>
                     {over&&<div style={{fontSize:10,color:"#FF6B6B",fontWeight:700,marginTop:2}}>⚠️ Over by ${(spent-cat.budget).toFixed(2)}!</div>}
@@ -714,14 +830,12 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
             <button onClick={()=>setView("home")} style={{background:"none",border:"none",fontWeight:800,fontSize:13,color:"#764ba2",cursor:"pointer",marginBottom:10,padding:0,fontFamily:"inherit"}}>← Back</button>
             <div style={{fontWeight:900,fontSize:20,color:"#333",marginBottom:12}}>History 📋</div>
 
-            {/* Tab switcher */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:16,background:"#f0f0f0",borderRadius:12,padding:4}}>
               {[{id:"monthly",label:"This Month"},{id:"allmonths",label:"Month View"},{id:"yearly",label:"Full Year"}].map(t=>(
                 <button key={t.id} onClick={()=>setHistoryTab(t.id)} className="bp" style={{padding:"9px 4px",background:historyTab===t.id?"#fff":"transparent",color:historyTab===t.id?"#333":"#999",border:"none",borderRadius:9,fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"inherit",marginBottom:0,boxShadow:historyTab===t.id?"0 2px 6px rgba(0,0,0,.1)":"none",transition:"all .15s"}}>{t.label}</button>
               ))}
             </div>
 
-            {/* THIS MONTH — transaction list */}
             {historyTab==="monthly"&&<>
               <div style={{fontWeight:700,fontSize:12,color:"#aaa",marginBottom:10}}>{MONTHS[selMonth]} transactions · tap to edit</div>
               {allHistory.filter(i=>{const d=new Date(i.date);return d.getMonth()===selMonth&&d.getFullYear()===currentYear;}).length===0
@@ -740,7 +854,6 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
               }
             </>}
 
-            {/* MONTH OVER MONTH view */}
             {historyTab==="allmonths"&&<>
               <div style={{fontWeight:700,fontSize:12,color:"#aaa",marginBottom:10}}>Every month since June</div>
               <div style={{display:"flex",flexDirection:"column",gap:10}}>
@@ -787,18 +900,13 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
               </div>
             </>}
 
-            {/* YEARLY SUMMARY */}
             {historyTab==="yearly"&&<>
               <div style={{fontWeight:700,fontSize:12,color:"#aaa",marginBottom:10}}>June – December {currentYear}</div>
-
-              {/* Year totals */}
               {(()=>{
                 const allTxns=data.transactions.filter(t=>!t.isRollover);
                 const allEarns=data.earnings;
                 const totalYearSpent=allTxns.reduce((s,t)=>s+t.amount,0);
                 const totalYearEarned=(avail.length*effectiveBudget)+allEarns.reduce((s,e)=>s+e.amount,0);
-                const totalYearSaved=data.savingsLog.filter(s=>s.type!=="withdraw").reduce((s,e)=>s+e.amount,0)
-                  -data.savingsLog.filter(s=>s.type==="withdraw").reduce((s,e)=>s+e.amount,0);
                 return(
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:16}}>
                     {[{label:"Total Earned",val:totalYearEarned,color:"#6C63FF",emoji:"⭐"},
@@ -813,8 +921,6 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
                   </div>
                 );
               })()}
-
-              {/* Category year totals */}
               <div style={{fontWeight:800,fontSize:13,color:"#333",marginBottom:8}}>By Category</div>
               <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:16}}>
                 {CATEGORIES.map(cat=>{
@@ -833,8 +939,6 @@ Opening report style: punchy podcast intro → celebrate wins → flag concerns 
                   );
                 })}
               </div>
-
-              {/* Future items year summary */}
               <div style={{fontWeight:800,fontSize:13,color:"#333",marginBottom:8}}>Future Expenses Used</div>
               <div style={{display:"flex",flexDirection:"column",gap:6}}>
                 {(data.futureItems||[]).map(item=>{
